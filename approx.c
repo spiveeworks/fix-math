@@ -42,12 +42,15 @@ Unit unit_add(Unit x, Unit y) {
 
 Unit unit_mul(Unit x, Unit y) {
 	// x = x.hi / 2^32 + x.lo / 2^64;
-	// x * y = (x.hi * y.hi / 2^64 + (x.lo * y.hi + x.hi * y.lo) / 2 ^ 96
+	// x * y = x.hi * y.hi / 2^64 + (x.lo * y.hi + x.hi * y.lo) / 2 ^ 96
 	//   + x.lo * y.lo / 2^128
-	Unit mulhihi = unit_from_u64((u64) x.hi * (u64) y.hi);
-	mulhihi.lo += unit_from_u64((u64) x.lo * (u64) y.hi).hi;
-	mulhihi.lo += unit_from_u64((u64) x.hi * (u64) y.lo).hi;
-	return mulhihi;
+	u64 result = (u64) x.lo * (u64) y.lo;
+	result >>= 32;
+	result += (u64) x.lo * (u64) y.hi;
+	result += (u64) x.hi * (u64) y.lo;
+	result >>= 32;
+	result += (u64) x.hi * (u64) y.hi;
+	return unit_from_u64(result);
 }
 
 typedef enum {
