@@ -3,7 +3,8 @@
 typedef unsigned u32;
 typedef long long unsigned u64;
 
-const u64 LO = ((u64) 1 << 32) - 1;
+const u64 SQRTMAX64 = (u64)1 << 32;
+const u64 LO = SQRTMAX64 - 1;
 const u64 HI = LO << 32;
 
 typedef struct {
@@ -24,13 +25,17 @@ u64 u64_from_unit(Unit x) {
 	return ((u64) x.hi << 32) | (u64) x.lo;
 }
 
-float f32_from_unit(Unit x) {
-	return (float)x.hi / (float)((u64)1 << 32);
+double f64_from_unit(Unit x) {
+	double result = (double)u64_from_unit(x);
+	result /= SQRTMAX64;
+	result /= SQRTMAX64;
+	return result;
 }
 
-Unit unit_from_f32(float x) {
-	Unit result = {x * (float)((u64)1 << 32), 0};
-	return result;
+Unit unit_from_f64(double x) {
+	x *= SQRTMAX64;
+	x *= SQRTMAX64;
+	return unit_from_u64(x);
 }
 
 
@@ -97,7 +102,7 @@ bool test_unit_overflow(Unit x, Unit y) {
 	//   x + y >= 1
 	//   x >= 1 - y
 	// !(x < 1 - y)
-	return unit_lss(x, unit_negate(y));
+	return !unit_lss(x, unit_negate(y));
 }
 
 Unit unit_rshift(Unit x, u32 shift) {
@@ -124,6 +129,19 @@ typedef struct {
 	Unit x;
 	Unit y;
 } Rotation;
+
+void rot_debug(Rotation z1) {
+	printf("z: %016llx * %08x %08x, %08x %08x; ",
+		z1.quarter_turns,
+		z1.x.hi, z1.x.lo,
+		z1.y.hi, z1.y.lo
+	);
+	printf("(%f * %f, %f)\n",
+		f64_from_unit(unit_from_u64(z1.quarter_turns)),
+		f64_from_unit(z1.x),
+		f64_from_unit(z1.y)
+	);
+}
 
 // will halve result to keep it in unit square if necessary
 Rotation rot_mul(Rotation z1, Rotation z2) {
@@ -160,26 +178,40 @@ Rotation rot_mul(Rotation z1, Rotation z2) {
 	return result;
 }
 
-bool tan_lss(Unit x, Unit y) {
-	// tan(x) < y
-	// arg(1 + i*y) < x
-	// 4*arg((1 + i*y)^(2^62)) < x*2^64
-	// quarter_turns < x
+// dedekind cuts represent real numbers as the set of rational numbers smaller
+// than them
+// so tan(x) as a cut is the set {y : y < tan(x)}
+// so our convention is f_cut(x, y) <=> y < f(x)
+// such that currying f_cut would actually give a function Rat->Real
+
+Unit arctan(Unit y) {
+	//   2^64 * arctan(y)
+	// = 2^64 * arg(1 + iy)
+	// = 4 * arg((1 + iy)^(2^62))
+	// = quarter turns of (1 + iy)^(2^62)
 	Rotation z = {0,UNIT_HALF,unit_rshift(y, 1)};
 	for (int i = 0; i < 62; i++) {
 		z = rot_mul(z, z);
 	}
-	return z.quarter_turns < u64_from_unit(x);
+	return unit_from_u64(z.quarter_turns);
 }
 
-Unit bisect(bool (*f_lss)(Unit, Unit), Unit x) {
+bool tan_cut(Unit x, Unit y) {
+	// y < tan(x)
+	// arctan(y) < x
+	return unit_lss(arctan(y), x);
+}
+
+Unit bisect(bool (*f_cut)(Unit, Unit), Unit x) {
 	Unit y = UNIT_HALF;
 	Unit delta = unit_rshift(y, 1);
 	while (u64_from_unit(delta)) {
-		if (f_lss(x, y)) {
-			y = unit_sub(y, delta);
-		} else {
+		if (f_cut(x, y)) {
+			// increase while below the cut
 			y = unit_add(y, delta);
+		} else {
+			// decrease while above the cut
+			y = unit_sub(y, delta);
 		}
 		delta = unit_rshift(delta, 1);
 	}
@@ -187,16 +219,16 @@ Unit bisect(bool (*f_lss)(Unit, Unit), Unit x) {
 }
 
 Unit tan_bisect(Unit x) {
-	return bisect(tan_lss, x);
+	return bisect(tan_cut, x);
 }
 
 int main() {
-	const int size = 50;
-	for (int j = 0; j <= size; j++) {
+	const int size = 20;
+	for (int j = size-1; j >= 0; j--) {
 		for (int i = 0; i <= size; i++) {
 			float x = (float)i/(float)(8*size);
-			float y = (float)(20 - j)/(float)size;
-			if (tan_lss(unit_from_f32(x), unit_from_f32(y))) {
+			float y = (float)j/(float)size;
+			if (tan_cut(unit_from_f64(x), unit_from_f64(y))) {
 				putchar('X');
 			} else {
 				putchar(' ');
@@ -207,8 +239,8 @@ int main() {
 	const u32 n = 16;
 	for (u32 i = 0; i < n; i++) {
 		float x = (float)i/(float)(8*n);
-		float y = f32_from_unit(tan_bisect(unit_from_f32(x)));
-		printf("tan(%f) = %f\n", x, y);
+		double y = f64_from_unit(tan_bisect(unit_from_f64(x)));
+		printf("tan(%.15f) = %.30lf\n", x, y);
 	}
 }
 
