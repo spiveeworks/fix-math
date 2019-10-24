@@ -110,7 +110,9 @@ bool uinf_lss(uinf x, uinf y) {
 void uinf_rshift(uinf x, u64 shift) {
 	const u32 mask = (1 << shift) - 1;
 	u32 prev_carry = 0;
-	for (u64 i = x.size - 1; i >= 0; i--) {
+	u64 i = x.size;
+	while (i > 0) {
+		i--;
 		u32 carry = x.data[i] & mask;
 		x.data[i] >>= shift;
 		x.data[i] |= prev_carry << (32 - shift);
@@ -120,7 +122,7 @@ void uinf_rshift(uinf x, u64 shift) {
 
 void uinf_lshift(uinf x, u64 shift) {
 	u32 prev_carry = 0;
-	for (u64 i = 0; i < x.size; i--) {
+	for (u64 i = 0; i < x.size; i++) {
 		u32 carry = x.data[i] >> (32 - shift);
 		x.data[i] <<= shift;
 		x.data[i] |= prev_carry;
@@ -138,24 +140,20 @@ typedef struct {
 	uinf y;
 } Rotation;
 
-/*
 void rot_debug(Rotation z1) {
-	printf("z: %016llx * %08x %08x, %08x %08x; ",
-		z1.quarter_turns,
-		z1.x.hi, z1.x.lo,
-		z1.y.hi, z1.y.lo
-	);
-	printf("(%f * %f, %f)\n",
-		f64_from_unit(unit_from_u64(z1.quarter_turns)),
-		f64_from_unit(z1.x),
-		f64_from_unit(z1.y)
-	);
+	printf("%016llx *", z1.quarter_turns);
+	for (u64 i = 0; i < z1.x.size; i++) {
+		printf(" %08x", z1.x.data[z1.x.size - i - 1]);
+	}
+	printf(",");
+	for (u64 i = 0; i < z1.y.size; i++) {
+		printf(" %08x", z1.y.data[z1.y.size - i - 1]);
+	}
 }
-*/
 
 // out += z1 * z2
 // result will have magnitude adjusted to stop it running to 0/infinity
-void rot_mul(Rotation out, Rotation z1, Rotation z2) {
+Rotation rot_mul(Rotation out, Rotation z1, Rotation z2) {
 	// i^n1*(x1 + i*y1) * i^n2*(x2 + i*y2)
 	// = i^(n1+n2)*(x1*x2 - y1*y2 + i*(x1*y2 + x2*y1))
 	out.quarter_turns += z1.quarter_turns;
@@ -167,7 +165,7 @@ void rot_mul(Rotation out, Rotation z1, Rotation z2) {
 
 	uinf_mul(out.x, z1.x, z2.x);
 	uinf_negate(out.x);
-	bool rotate = !uinf_mul(out.x, z1.y, z2.y);
+	bool rotate = uinf_mul(out.x, z1.y, z2.y);
 	// at this point we have y1*y2 - (out.x + x1*x2)
 	// the subend was negative so no overflow means it is still negative
 
@@ -187,6 +185,16 @@ void rot_mul(Rotation out, Rotation z1, Rotation z2) {
 		out.y = x;
 		out.quarter_turns++;
 	}
+
+	while (!(
+		(out.x.data[out.x.size - 1] & HALFMAX32) ||
+		(out.y.data[out.y.size - 1] & HALFMAX32)
+	)) {
+		uinf_lshift(out.x, 1);
+		uinf_lshift(out.y, 1);
+	}
+
+	return out;
 }
 
 //////////////////////////////
@@ -218,7 +226,7 @@ u64 arctan(u64 y) {
 			out.x.data[j] = 0;
 			out.y.data[j] = 0;
 		}
-		rot_mul(out, z, z);
+		out = rot_mul(out, z, z);
 		z.quarter_turns = out.quarter_turns;
 		for (u64 j = 0; j < z.x.size; j++) {
 			z.x.data[j] = out.x.data[j + ACC];
@@ -257,14 +265,20 @@ Unit tan_bisect(Unit x) {
 */
 
 int main() {
-	const int size = 20;
-	for (int j = size-1; j >= 0; j--) {
-		float y = (float)j/(float)size;
+#define YS 5
+	float ys[YS] = {0.49f, 0.5f, 0.51f, 0.5125f, 0.0078125f};
+	for (int j = 0; j < YS; j++) {
+		float y = ys[j];
 		y *= SQRTMAX64;
 		y *= SQRTMAX64;
+		u64 y_u = y;
+		u64 arclen_u = arctan(y);
 		float arclen = arctan(y);
 		arclen /= SQRTMAX64;
 		arclen /= SQRTMAX64;
+		printf("arctan(%llu) = %llu\n", y_u, arclen_u);
+		printf("i.e. arctan(%.8f) = %f\n", ys[j], arclen);
+		/*
 		for (int i = 0; i <= size; i++) {
 			float x = (float)i/(float)(8*size);
 			if (arclen < x) {
@@ -274,6 +288,7 @@ int main() {
 			}
 		}
 		printf("\n");
+		*/
 	}
 	/*
 	const u32 n = 16;
