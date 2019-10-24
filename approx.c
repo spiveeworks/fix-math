@@ -212,7 +212,7 @@ u64 arctan(u64 y) {
 	// = 4 * arg((1 + iy)^(2^62))
 	// = quarter turns of (1 + iy)^(2^62)
 #define ACC 2
-	u32 data[ACC * 6] = {0};
+	u32 data[ACC * 6];
 	Rotation z = {0, {ACC, data}, {ACC, data + ACC}};
 	Rotation out = {0, {2*ACC, data + 2 * ACC}, {2*ACC, data + 4 * ACC}};
 	z.x.data[0] = 0;
@@ -234,6 +234,42 @@ u64 arctan(u64 y) {
 		}
 	}
 	return z.quarter_turns;
+}
+
+u64 neglog2(u64 y0) {
+	//   2^64 * arctan(y)
+	// = 2^64 * arg(1 + iy)
+	// = 4 * arg((1 + iy)^(2^62))
+	// = quarter turns of (1 + iy)^(2^62)
+#define ACC 2
+	u32 data[ACC * 3];
+	uinf y = {ACC, data}, out = {2*ACC, data+ACC};
+	y.data[0] = y0 & LO;
+	y.data[1] = y0 >> 32;
+	u64 x = 0;
+	for (u64 i = 0; i < 64; i++) {
+		// this short circuit condition mainly exists so that the result is the
+		// floor instead of ceil(x-1)
+		if (y.data[0] == 0 && y.data[1] == HALFMAX32) {
+			x += 1;
+			// double y to get 1, which is a fixpoint of _^2
+			// so just finish doubling x and return
+			return i == 0 ? 0 : x << (64 - i);
+		}
+		for (u64 j = 0; j < out.size; j++) {
+			out.data[j] = 0;
+		}
+		uinf_mul(out, y, y);
+		x *= 2;
+		while (!(out.data[out.size - 1] & HALFMAX32)) {
+			uinf_lshift(out, 1);
+			x += 1;
+		}
+		for (u64 j = 0; j < y.size; j++) {
+			y.data[j] = out.data[j + ACC];
+		}
+	}
+	return x;
 }
 
 /*
@@ -266,18 +302,25 @@ Unit tan_bisect(Unit x) {
 
 int main() {
 #define YS 5
-	float ys[YS] = {0.49f, 0.5f, 0.51f, 0.5125f, 0.0078125f};
+	float ys[YS] = {0.49f, 0.5f, 0.51f, 0.5625f, 0.0078125f};
 	for (int j = 0; j < YS; j++) {
 		float y = ys[j];
 		y *= SQRTMAX64;
 		y *= SQRTMAX64;
 		u64 y_u = y;
 		u64 arclen_u = arctan(y);
-		float arclen = arctan(y);
+		float arclen = arclen_u;
 		arclen /= SQRTMAX64;
 		arclen /= SQRTMAX64;
+		u64 neglog_u = neglog2(y);
+		float neglog = neglog_u;
+		neglog /= SQRTMAX64;
+		neglog /= SQRTMAX64;
 		printf("arctan(%llu) = %llu\n", y_u, arclen_u);
 		printf("i.e. arctan(%.8f) = %f\n", ys[j], arclen);
+		printf("-log(%llu) = %llu\n", y_u, neglog_u);
+		printf("i.e. log(%.8f) = %f\n", ys[j], -neglog);
+		printf("\n");
 		/*
 		for (int i = 0; i <= size; i++) {
 			float x = (float)i/(float)(8*size);
