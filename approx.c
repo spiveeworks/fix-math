@@ -157,13 +157,25 @@ void uinf_rshift(uinf x, u64 shift) {
 }
 
 void uinf_lshift(uinf x, u64 shift) {
+	u64 shift_lo = shift % 32;
+	u64 shift_hi = shift / 32;
 	u32 prev_carry = 0;
 	for (u64 i = 0; i < x.size; i++) {
-		u32 carry = x.data[i] >> (32 - shift);
-		x.data[i] <<= shift;
+		u32 carry = x.data[i] >> (32 - shift_lo);
+		x.data[i] <<= shift_lo;
 		x.data[i] |= prev_carry;
 		prev_carry = carry;
 	}
+	u64 i = x.size;
+	while (i > 0) {
+		i--;
+		if (i >= shift_hi) {
+			x.data[i] = x.data[i-shift_hi];
+		} else {
+			x.data[i] = 0;
+		}
+	}
+
 }
 
 //////////////////////////////
@@ -246,64 +258,65 @@ void rot_mul(Rotation *out, Rotation z1, Rotation z2) {
 // so our convention is f_cut(x, y) <=> y < f(x)
 // such that currying f_cut would actually give a function Rat->Real
 
-u64 arctan(u64 y) {
+// x = arctan(y)
+// modifies x and y
+// assumes x is initially 0
+void arctan(uinf x, uinf y) {
 	//   2^n * arctan(y)
 	// = 2^n * arg(1 + iy)
 	// = 4 * arg((1 + iy)^(2^(n-2)))
 	// = quarter turns of (1 + iy)^(2^(n-2))
-	const size_t ACC = 2;
-	ROT_ALLOCA(z, ACC);
-	uinf_zero(z.quarter_turns);
+	const u64 n = y.size * 32;
+	UINF_ALLOCA(z_x, y.size);
+	Rotation z = {x, z_x, y};
 	uinf_halfmax(z.x);
-	y >>= 1;
-	uinf_assign64(z.y, y);
-	ROT_ALLOCA(out, 2*ACC);
-	for (u64 i = 0; i < 62; i++) {
+	uinf_rshift(y, 1);
+	ROT_ALLOCA(out, 2*y.size);
+	for (u64 i = 0; i < n-2; i++) {
 		uinf_zero(out.quarter_turns);
 		uinf_zero(out.x);
 		uinf_zero(out.y);
 		rot_mul(&out, z, z);
 		for (u64 j = 0; j < z.x.size; j++) {
 			z.quarter_turns.data[j] = out.quarter_turns.data[j];
-			z.x.data[j] = out.x.data[j + ACC];
-			z.y.data[j] = out.y.data[j + ACC];
+			z.x.data[j] = out.x.data[j + y.size];
+			z.y.data[j] = out.y.data[j + y.size];
 		}
 	}
-	return uinf_read64(z.quarter_turns);
 }
 
-u64 neglog2(u64 y0) {
+// x = -log_2(y)-1
+// modifies x and y
+// assumes x is initially 0
+void neglog2(uinf x, uinf y) {
 	//   2^64 * log(y)
 	// = log(y^(2^64))
 	// so calculate (y^(2^64)) as a floating point and discard the mantissa
-	const size_t ACC = 2;
-	UINF_ALLOCA(y, ACC);
-	uinf_assign64(y, y0);
-	UINF_ALLOCA(out, 2*ACC);
-	u64 x = 0;
-	for (u64 i = 0; i < 64; i++) {
+	const u64 n = y.size * 32;
+	UINF_ALLOCA(out, y.size * 2);
+	for (u64 i = 0; i < n; i++) {
 		// this short circuit condition mainly exists so that the result is the
 		// floor instead of ceil(x-1)
 		if (y.data[0] == 0 && y.data[1] == HALFMAX32) {
-			x += 1;
+			uinf_inc(x);
 			// double y to get 1, which is a fixpoint of _^2
 			// so just finish doubling x and return
-			return i == 0 ? 0 : x << (64 - i);
+			uinf_lshift(x, n - i);
+			return;
 		}
 		for (u64 j = 0; j < out.size; j++) {
 			out.data[j] = 0;
 		}
 		uinf_mul(out, y, y);
-		x *= 2;
+		uinf_lshift(x, 1);
 		while (!(out.data[out.size - 1] & HALFMAX32)) {
 			uinf_lshift(out, 1);
-			x += 1;
+			uinf_inc(x);
 		}
 		for (u64 j = 0; j < y.size; j++) {
-			y.data[j] = out.data[j + ACC];
+			y.data[j] = out.data[j + y.size];
 		}
 	}
-	return x;
 }
 
 /*
@@ -342,18 +355,32 @@ int main() {
 		y *= SQRTMAX64;
 		y *= SQRTMAX64;
 		u64 y_u = y;
-		u64 arclen_u = arctan(y);
-		float arclen = arclen_u;
-		arclen /= SQRTMAX64;
-		arclen /= SQRTMAX64;
-		u64 neglog_u = neglog2(y);
-		float neglog = neglog_u;
-		neglog /= SQRTMAX64;
-		neglog /= SQRTMAX64;
-		printf("arctan(%llu) = %llu\n", y_u, arclen_u);
-		printf("i.e. arctan(%.8f) = %f\n", ys[j], arclen);
-		printf("-log(%llu) = %llu\n", y_u, neglog_u);
-		printf("i.e. log(%.8f) = %f\n", ys[j], -neglog);
+		{
+			UINF_ALLOCA(x, 2);
+			uinf_zero(x);
+			UINF_ALLOCA(y, 2);
+			uinf_assign64(y, y_u);
+			arctan(x, y);
+			u64 arclen_u = uinf_read64(x);
+			float arclen = arclen_u;
+			arclen /= SQRTMAX64;
+			arclen /= SQRTMAX64;
+			printf("arctan(%llu) = %llu\n", y_u, arclen_u);
+			printf("i.e. arctan(%.8f) = %f\n", ys[j], arclen);
+		}
+		{
+			UINF_ALLOCA(x, 2);
+			uinf_zero(x);
+			UINF_ALLOCA(y, 2);
+			uinf_assign64(y, y_u);
+			neglog2(x, y);
+			u64 neglog_u = uinf_read64(x);
+			float neglog = neglog_u;
+			neglog /= SQRTMAX64;
+			neglog /= SQRTMAX64;
+			printf("-log(%llu) = %llu\n", y_u, neglog_u);
+			printf("i.e. log(%.8f) = %f\n", ys[j], -neglog);
+		}
 		printf("\n");
 		/*
 		for (int i = 0; i <= size; i++) {
