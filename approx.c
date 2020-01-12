@@ -5,10 +5,9 @@ typedef long long unsigned u64;
 
 const u32 HALFMAX32 = (u32)1 << 31;
 const u64 SQRTMAX64 = (u64)1 << 32;
-const u64 LO = SQRTMAX64 - 1;
-// don't think we actually use this
-// since we need to rshift anyway
-const u64 HI = LO << 32;
+const u64 LO = ((u64)1 << 32) - 1;
+// this is never used since rshift destroys low bits
+// const u64 HI = LO << 32;
 
 typedef enum {
 	false,
@@ -24,6 +23,33 @@ typedef struct {
 	u32 *data;
 } uinf;
 
+#define UINF_ALLOCA(name, size) \
+u32 name##_data[size];\
+uinf name = {size, name##_data};
+
+void uinf_zero(uinf out) {
+	for (u64 i = 0; i < out.size; i++) {
+		out.data[i] = 0;
+	}
+}
+
+void uinf_assign64(uinf out, u64 x) {
+	uinf_zero(out);
+	out.data[out.size - 2] = x & LO;
+	out.data[out.size - 1] = x >> 32;
+}
+
+u64 uinf_read64(uinf x) {
+	u64 hi = x.data[x.size-1];
+	u64 lo = x.data[x.size-2];
+	return (hi << 32) | lo;
+}
+
+void uinf_halfmax(uinf out) {
+	uinf_zero(out);
+	out.data[out.size - 1] = HALFMAX32;
+}
+
 // perfectly safe to set any of these equal,
 // just don't overlap end of x/y with start of out
 // returns the final overflow if desired
@@ -36,7 +62,17 @@ bool uinf_add(uinf out, uinf x, uinf y) {
 		if (i < y.size) {
 			carry += y.data[i];
 		}
-		x.data[i] = carry & LO; // the mask might be implicit from downcast
+		out.data[i] = carry & LO; // the mask might be implicit from downcast
+		carry >>= 32;
+	}
+	return carry;
+}
+
+bool uinf_inc(uinf out) {
+	u64 carry = 1;
+	for (u64 i = 0; i < out.size; i++) {
+		carry += out.data[i];
+		out.data[i] = carry & LO; // the mask might be implicit from downcast
 		carry >>= 32;
 	}
 	return carry;
@@ -135,10 +171,16 @@ void uinf_lshift(uinf x, u64 shift) {
 
 // complex number in a unit square with a number to keep track of winding
 typedef struct {
-	u64 quarter_turns;
+	uinf quarter_turns;
 	uinf x;
 	uinf y;
 } Rotation;
+
+#define ROT_ALLOCA(name, size) \
+UINF_ALLOCA(name##_qt, size);\
+UINF_ALLOCA(name##_x, size);\
+UINF_ALLOCA(name##_y, size);\
+Rotation name = {name##_qt, name##_x, name##_y};
 
 void rot_debug(Rotation z1) {
 	printf("%016llx *", z1.quarter_turns);
@@ -153,48 +195,46 @@ void rot_debug(Rotation z1) {
 
 // out += z1 * z2
 // result will have magnitude adjusted to stop it running to 0/infinity
-Rotation rot_mul(Rotation out, Rotation z1, Rotation z2) {
+void rot_mul(Rotation *out, Rotation z1, Rotation z2) {
 	// i^n1*(x1 + i*y1) * i^n2*(x2 + i*y2)
 	// = i^(n1+n2)*(x1*x2 - y1*y2 + i*(x1*y2 + x2*y1))
-	out.quarter_turns += z1.quarter_turns;
-	out.quarter_turns += z2.quarter_turns;
+	uinf_add(out->quarter_turns, out->quarter_turns, z1.quarter_turns);
+	uinf_add(out->quarter_turns, out->quarter_turns, z2.quarter_turns);
 
 	bool carry = false;
-	carry = carry || uinf_mul(out.y, z1.x, z1.y);
-	carry = carry || uinf_mul(out.y, z1.y, z1.x);
+	carry = carry || uinf_mul(out->y, z1.x, z1.y);
+	carry = carry || uinf_mul(out->y, z1.y, z1.x);
 
-	uinf_mul(out.x, z1.x, z2.x);
-	uinf_negate(out.x);
-	bool rotate = uinf_mul(out.x, z1.y, z2.y);
-	// at this point we have y1*y2 - (out.x + x1*x2)
+	uinf_mul(out->x, z1.x, z2.x);
+	uinf_negate(out->x);
+	bool rotate = uinf_mul(out->x, z1.y, z2.y);
+	// at this point we have y1*y2 - (out->x + x1*x2)
 	// the subend was negative so no overflow means it is still negative
 
 	if (!rotate) {
-		uinf_negate(out.x);
+		uinf_negate(out->x);
 	}
 
 	if (carry) {
-		uinf_rshift(out.x, 1);
-		uinf_rshift(out.y, 1);
-		out.y.data[out.y.size - 1] |= HALFMAX32;
+		uinf_rshift(out->x, 1);
+		uinf_rshift(out->y, 1);
+		out->y.data[out->y.size - 1] |= HALFMAX32;
 	}
 
 	if (rotate) {
-		uinf x = out.x;
-		out.x = out.y;
-		out.y = x;
-		out.quarter_turns++;
+		uinf x = out->x;
+		out->x = out->y;
+		out->y = x;
+		uinf_inc(out->quarter_turns);
 	}
 
 	while (!(
-		(out.x.data[out.x.size - 1] & HALFMAX32) ||
-		(out.y.data[out.y.size - 1] & HALFMAX32)
+		(out->x.data[out->x.size - 1] & HALFMAX32) ||
+		(out->y.data[out->y.size - 1] & HALFMAX32)
 	)) {
-		uinf_lshift(out.x, 1);
-		uinf_lshift(out.y, 1);
+		uinf_lshift(out->x, 1);
+		uinf_lshift(out->y, 1);
 	}
-
-	return out;
 }
 
 //////////////////////////////
@@ -207,45 +247,39 @@ Rotation rot_mul(Rotation out, Rotation z1, Rotation z2) {
 // such that currying f_cut would actually give a function Rat->Real
 
 u64 arctan(u64 y) {
-	//   2^64 * arctan(y)
-	// = 2^64 * arg(1 + iy)
-	// = 4 * arg((1 + iy)^(2^62))
-	// = quarter turns of (1 + iy)^(2^62)
-#define ACC 2
-	u32 data[ACC * 6];
-	Rotation z = {0, {ACC, data}, {ACC, data + ACC}};
-	Rotation out = {0, {2*ACC, data + 2 * ACC}, {2*ACC, data + 4 * ACC}};
-	z.x.data[0] = 0;
-	z.x.data[1] = HALFMAX32;
+	//   2^n * arctan(y)
+	// = 2^n * arg(1 + iy)
+	// = 4 * arg((1 + iy)^(2^(n-2)))
+	// = quarter turns of (1 + iy)^(2^(n-2))
+	const size_t ACC = 2;
+	ROT_ALLOCA(z, ACC);
+	uinf_zero(z.quarter_turns);
+	uinf_halfmax(z.x);
 	y >>= 1;
-	z.y.data[0] = y & LO;
-	z.y.data[1] = y >> 32;
+	uinf_assign64(z.y, y);
+	ROT_ALLOCA(out, 2*ACC);
 	for (u64 i = 0; i < 62; i++) {
-		out.quarter_turns = 0;
-		for (u64 j = 0; j < out.x.size; j++) {
-			out.x.data[j] = 0;
-			out.y.data[j] = 0;
-		}
-		out = rot_mul(out, z, z);
-		z.quarter_turns = out.quarter_turns;
+		uinf_zero(out.quarter_turns);
+		uinf_zero(out.x);
+		uinf_zero(out.y);
+		rot_mul(&out, z, z);
 		for (u64 j = 0; j < z.x.size; j++) {
+			z.quarter_turns.data[j] = out.quarter_turns.data[j];
 			z.x.data[j] = out.x.data[j + ACC];
 			z.y.data[j] = out.y.data[j + ACC];
 		}
 	}
-	return z.quarter_turns;
+	return uinf_read64(z.quarter_turns);
 }
 
 u64 neglog2(u64 y0) {
-	//   2^64 * arctan(y)
-	// = 2^64 * arg(1 + iy)
-	// = 4 * arg((1 + iy)^(2^62))
-	// = quarter turns of (1 + iy)^(2^62)
-#define ACC 2
-	u32 data[ACC * 3];
-	uinf y = {ACC, data}, out = {2*ACC, data+ACC};
-	y.data[0] = y0 & LO;
-	y.data[1] = y0 >> 32;
+	//   2^64 * log(y)
+	// = log(y^(2^64))
+	// so calculate (y^(2^64)) as a floating point and discard the mantissa
+	const size_t ACC = 2;
+	UINF_ALLOCA(y, ACC);
+	uinf_assign64(y, y0);
+	UINF_ALLOCA(out, 2*ACC);
 	u64 x = 0;
 	for (u64 i = 0; i < 64; i++) {
 		// this short circuit condition mainly exists so that the result is the
