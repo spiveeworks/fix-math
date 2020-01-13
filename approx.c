@@ -144,6 +144,8 @@ bool uinf_lss(uinf x, uinf y) {
 }
 
 void uinf_rshift(uinf x, u64 shift) {
+	shift %= 32;
+	u64 shift_hi = shift / 32;
 	const u32 mask = (1 << shift) - 1;
 	u32 prev_carry = 0;
 	u64 i = x.size;
@@ -154,15 +156,22 @@ void uinf_rshift(uinf x, u64 shift) {
 		x.data[i] |= prev_carry << (32 - shift);
 		prev_carry = carry;
 	}
+	for (u64 j = 0; j < x.size; j++) {
+		if (j < x.size - shift_hi) {
+			x.data[j] = x.data[j + shift_hi];
+		} else {
+			x.data[j] = 0;
+		}
+	}
 }
 
 void uinf_lshift(uinf x, u64 shift) {
-	u64 shift_lo = shift % 32;
+	shift %= 32;
 	u64 shift_hi = shift / 32;
 	u32 prev_carry = 0;
 	for (u64 i = 0; i < x.size; i++) {
-		u32 carry = x.data[i] >> (32 - shift_lo);
-		x.data[i] <<= shift_lo;
+		u32 carry = x.data[i] >> (32 - shift);
+		x.data[i] <<= shift;
 		x.data[i] |= prev_carry;
 		prev_carry = carry;
 	}
@@ -290,7 +299,7 @@ void arctan(uinf x, uinf y) {
 // assumes x is initially 0
 // note arcsin(y) = arcspread(y*y)
 void arcspread(uinf x, uinf s) {
-	// set s to y^2 = sin^2(theta), then
+	// set s to sin^2(theta), then
 	// sin^2(2theta) = 4sin^2(theta)cos^2(theta)
 	//               = 4sin^2(theta)(1-sin^2(theta))
 	//               = 4s(1-s)
@@ -299,9 +308,19 @@ void arcspread(uinf x, uinf s) {
 	//                       = cos^2(2theta)
 	//                       = 1 - sin^2(2theta)
 	const u64 n = x.size * 32;
+	bool prev_domain = false;
+	bool prev_digit = false;
+	if (s.data[s.size - 1] & HALFMAX32) {
+		prev_domain = true;
+		prev_digit = true;
+		uinf_inc(x);
+	}
 	u64 exp = 0;
 	UINF_ALLOCA(out, 2 * s.size);
-	for (u64 i = 0; i < n-2; i++) {
+	for (u64 i = 0; i < n-3; i++) {
+		if (0) {
+			printf("sin^2(t*2^%llu) = %llu; exp = %llu\n", i, uinf_read64(s), exp);
+		}
 		uinf_zero(out);
 		uinf_mul(out, s, s);
 		uinf_rshift(out, exp);
@@ -310,7 +329,7 @@ void arcspread(uinf x, uinf s) {
 		uinf_add(out_hi, out_hi, s);
 
 		uinf_lshift(x, 1);
-		while (out.data[out.size - 1] & HALFMAX32) {
+		while (!(out.data[out.size - 1] & HALFMAX32)) {
 			uinf_lshift(out, 1);
 			exp += 1;
 		}
@@ -318,11 +337,19 @@ void arcspread(uinf x, uinf s) {
 			printf("Overflow\n");
 		}
 		exp -= 2;
-		if (exp == 0) {
-			uinf_negate(out);
-			uinf_inc(x);
+		{
+			bool this_domain = (exp == 0);
+			bool this_digit = this_domain != prev_digit;
+			if (this_domain) {
+				uinf_negate(out);
+			}
+			if (this_digit) {
+				uinf_inc(x);
+			}
+			prev_domain = this_domain;
+			prev_digit = this_digit;
 		}
-		while (out.data[out.size - 1] & HALFMAX32) {
+		while (!(out.data[out.size - 1] & HALFMAX32)) {
 			uinf_lshift(out, 1);
 			exp += 1;
 		}
