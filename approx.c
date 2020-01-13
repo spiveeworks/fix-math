@@ -364,6 +364,7 @@ void arcspread(uinf x, uinf s) {
 // assumes x is initially 0
 void arcsin(uinf x, uinf y) {
 	UINF_ALLOCA(out, 2 * y.size);
+	uinf_zero(out);
 	uinf_mul(out, y, y);
 	uinf s = {y.size, out.data + y.size};
 	arcspread(x, out);
@@ -373,6 +374,7 @@ void arcsin(uinf x, uinf y) {
 // assumes x is initially 0
 void arccos(uinf x, uinf y) {
 	UINF_ALLOCA(out, 2 * y.size);
+	uinf_zero(out);
 	uinf_mul(out, y, y);
 	uinf_negate(out);
 	uinf s = {y.size, out.data + y.size};
@@ -457,7 +459,7 @@ void test() {
 		{0.5625F, 1504319350508084718, 1753919825228814155, 2857766193198573748, 15312181060378489024U},
 		{0.0078125F, 22936177926750894, 22936877886913355, 4588749140540474548, 0},
 		{0.2F, 0, 0, 0, 0},
-		{0.4F, 0, 0, 0, 0},
+		{0.4F, 0, 1208168419403369306, 0, 0},
 		// changing these values seems to change the output of asin...
 		// memory bug?
 		// {0.75F, 1889248794157641523, 2489817403875320550, 2121868614552067353, 0},
