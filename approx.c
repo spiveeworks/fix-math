@@ -285,36 +285,63 @@ void arctan(uinf x, uinf y) {
 	}
 }
 
-// x = arcsin(y)
-// modifies x and y
+// x = arcsin(sqrt(s))
+// modifies x and s
 // assumes x is initially 0
-void arcsin(uinf x, uinf y) {
+// note arcsin(y) = arcspread(y*y)
+void arcspread(uinf x, uinf s) {
 	// set s to y^2 = sin^2(theta), then
 	// sin^2(2theta) = 4sin^2(theta)cos^2(theta)
 	//               = 4sin^2(theta)(1-sin^2(theta))
 	//               = 4s(1-s)
-	// and whenever s > 0.5 we can scale down and increase x
-	const u64 n = y.size * 32;
-	UINF_ALLOCA(s, y.size);
-	UINF_ALLOCA(negs, y.size);
-	UINF_ALLOCA(out, 2 * y.size);
-	uinf_zero(out);
-	uinf_mul(out, y, y);
+	// and whenever s > 0.5 we can interpret this as
+	// sin^2(2(theta + 1/8)) = sin^2(2theta + 1/4)
+	//                       = cos^2(2theta)
+	//                       = 1 - sin^2(2theta)
+	const u64 n = x.size * 32;
+	UINF_ALLOCA(negs, s.size);
+	UINF_ALLOCA(out, 2 * s.size);
+	bool shift = false;
 	for (u64 i = 0; i < n-2; i++) {
-		if (out.data[out.size - 1] & HALFMAX32) {
-			uinf_rshift(out, 1);
-			uinf_inc(x);
-		}
-		for (size_t j = 0; j < y.size; j++) {
-			s.data[j] = out.data[j + y.size];
-			negs.data[j] = out.data[j + y.size];
+		shift = s.data[s.size - 1] & HALFMAX32;
+		for (size_t j = 0; j < s.size; j++) {
+			negs.data[j] = s.data[j];
 		}
 		uinf_negate(negs);
+
 		uinf_zero(out);
 		uinf_mul(out, s, negs);
+
 		uinf_lshift(x, 1);
 		uinf_lshift(out, 2);
+		if (shift) {
+			uinf_negate(out);
+			uinf_inc(x);
+		}
+		for (size_t j = 0; j < s.size; j++) {
+			s.data[j] = out.data[j + s.size];
+			negs.data[j] = out.data[j + s.size];
+		}
 	}
+}
+
+// modifies x but not y
+// assumes x is initially 0
+void arcsin(uinf x, uinf y) {
+	UINF_ALLOCA(out, 2 * y.size);
+	uinf_mul(out, y, y);
+	uinf s = {y.size, out.data + y.size};
+	arcspread(x, s);
+}
+
+// modifies x but not y
+// assumes x is initially 0
+void arccos(uinf x, uinf y) {
+	UINF_ALLOCA(out, 2 * y.size);
+	uinf_mul(out, y, y);
+	uinf s = {y.size, out.data + y.size};
+	uinf_negate(s);
+	arcspread(x, s);
 }
 
 // x = -log_2(y)-1
@@ -380,22 +407,23 @@ Unit tan_bisect(Unit x) {
 */
 
 int test() {
-#define YS 8
+#define YS 5
 	struct test {
 		float y;
 		u64 arctan;
 		u64 arcsin;
+		u64 arccos;
 		u64 log;
 	};
-	struct test tests[YS] = {
-		{0.49f, 1337637691987343317, 0, 537654661102540701},
-		{0.5f, 1361218612134873190, 0, 0},
-		{0.51f, 1384611644667422749, 0, 17919736732383054105U},
-		{0.5625f, 1504319350508084718, 0, 15312181060378489024U},
-		{0.0078125f, 22936177926750894, 0, 0},
-		{0.2f, 0, 0, 0},
-		{0.4f, 0, 0, 0},
-		{0.75f, 0, 0, 0},
+	const struct test tests[YS] = {
+		{0.49F, 1337637691987343317, 1503439474586368913, 3108246543841018990, 537654661102540701},
+		{0.5F, 1361218612134873190, 1537228672809129301, 3074457345618258602, 0},
+		{0.51F, 1384611644667422749, 1571243910720920770, 3040442107706467133, 17919736732383054105U},
+		{0.5625F, 1504319350508084718, 1753919825228814155, 2857766193198573748, 15312181060378489024U},
+		{0.0078125F, 22936177926750894, 22936877886913355, 4588749140540474548, 0},
+		//{0.2F, 0, 0, 0, 0},
+		//{0.4F, 0, 0, 0, 0},
+		//{0.75F, 0, 0, 0, 0},
 	};
 	for (int j = 0; j < YS; j++) {
 		float y = tests[j].y;
@@ -433,6 +461,23 @@ int test() {
 				printf("Incorrect value:\n");
 				printf("arcsin(%llu) = %llu\n", y_u, arclen_u);
 				printf("i.e. arcsin(%.8f) = %f\n", tests[j].y, arclen);
+				printf("\n");
+			}
+		}
+		{
+			UINF_ALLOCA(x, 2);
+			uinf_zero(x);
+			UINF_ALLOCA(y, 2);
+			uinf_assign64(y, y_u);
+			arccos(x, y);
+			u64 arclen_u = uinf_read64(x);
+			if (arclen_u != tests[j].arccos) {
+				float arclen = arclen_u;
+				arclen /= SQRTMAX64;
+				arclen /= SQRTMAX64;
+				printf("Incorrect value:\n");
+				printf("arccos(%llu) = %llu\n", y_u, arclen_u);
+				printf("i.e. arccos(%.8f) = %f\n", tests[j].y, arclen);
 				printf("\n");
 			}
 		}
