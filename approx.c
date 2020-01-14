@@ -417,7 +417,89 @@ Unit tan_bisect(Unit x) {
 }
 */
 
-void test() {
+//////////////////////////////
+// polynomial
+
+typedef struct {
+	u64 terms;
+	u64 size;
+	u32 *data;
+} poly;
+
+#define POLY_ALLOCA(name, terms, size) \
+u32 name##_data[terms * size];\
+poly name = {terms, size, name##_data};
+
+uinf poly_index(poly p, u64 i) {
+	return (uinf){p.size, &p.data[p.size * i]};
+}
+
+void zero(poly p) {
+	for (u64 i = 0; i < p.terms; i++) {
+		uinf_zero(poly_index(p, i));
+	}
+}
+
+void diff(poly p) {
+	for (u32 i = 1; i < p.terms; i++) {
+		uinf c = poly_index(p, i-1);
+		uinf n = {1, &i};
+		uinf k = poly_index(p, i);
+		uinf_zero(c);
+		uinf_mul(c, k, n);
+	}
+	uinf_zero(poly_index(p, p.terms - 1));
+}
+
+void poly_eval(uinf out, poly p, uinf x, u64 exp) {
+	UINF_ALLOCA(swap, p.size + x.size);
+	for (u64 i = 0; i < p.terms; i++) {
+		uinf_zero(swap);
+		uinf_mul(swap, out, x);
+		uinf_rshift(swap, exp);
+		uinf_zero(out);
+		uinf c = poly_index(p, p.terms - i - 1);
+		uinf_add(out, swap, c);
+	}
+}
+
+//////////////////////////////
+// tests/entry point
+
+void poly_test() {
+#define CS 3
+	const u64 cs[CS] = {200, 2000000, 5000000000000};
+	POLY_ALLOCA(p, 3, 2);
+	for (u64 i = 0; i < CS; i++) {
+		uinf_assign64(poly_index(p, i), cs[i]);
+	}
+	const u64 x_u = 5;
+	UINF_ALLOCA(x, 2);
+	uinf_assign64(x, x_u);
+	UINF_ALLOCA(y, 2);
+	{
+		uinf_zero(y);
+		poly_eval(y, p, x, 0);
+		u64 actual = uinf_read64(y);
+		u64 expected = cs[2]*x_u*x_u + cs[1]*x_u + cs[0];
+		if (actual != expected) {
+			printf("p(5) = %llu != %llu\n", actual, expected);
+		}
+	}
+	{
+		const u64 rshift = 10;
+		uinf_lshift(x, rshift);
+		uinf_zero(y);
+		poly_eval(y, p, x, rshift);
+		u64 actual = uinf_read64(y);
+		u64 expected = cs[2]*x_u*x_u + cs[1]*x_u + cs[0];
+		if (actual != expected) {
+			printf("p(5) = %llu != %llu\n", actual, expected);
+		}
+	}
+}
+
+void references_test() {
 #define YS 8
 	struct test {
 		float y;
@@ -524,8 +606,7 @@ void reciprocol_twopi(uinf out) {
 	}
 }
 
-int main() {
-	test();
+void test_pi() {
 	UINF_ALLOCA(data, 2);
 	reciprocol_twopi(data);
 	u64 data_u = uinf_read64(data);
@@ -534,5 +615,11 @@ int main() {
 	data_f /= SQRTMAX64;
 	printf("1/2pi = %llu\n", data_u);
 	printf("i.e. pi = %.8f\n", 0.5F / data_f);
+}
+
+int main() {
+	poly_test();
+	//references_test();
+	//test_pi();
 }
 
