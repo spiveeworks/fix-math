@@ -427,20 +427,20 @@ typedef struct {
 } poly;
 
 #define POLY_ALLOCA(name, terms, size) \
-u32 name##_data[terms * size];\
+u32 name##_data[(terms) * (size)];\
 poly name = {terms, size, name##_data};
 
 uinf poly_index(poly p, u64 i) {
 	return (uinf){p.size, &p.data[p.size * i]};
 }
 
-void zero(poly p) {
+void poly_zero(poly p) {
 	for (u64 i = 0; i < p.terms; i++) {
 		uinf_zero(poly_index(p, i));
 	}
 }
 
-void diff(poly p) {
+void poly_diff(poly p) {
 	for (u32 i = 1; i < p.terms; i++) {
 		uinf c = poly_index(p, i-1);
 		uinf n = {1, &i};
@@ -451,20 +451,115 @@ void diff(poly p) {
 	uinf_zero(poly_index(p, p.terms - 1));
 }
 
-void poly_eval(uinf out, poly p, uinf x, u64 exp) {
+void poly_eval(uinf out, poly p, uinf x, u64 x_exp) {
 	UINF_ALLOCA(swap, p.size + x.size);
 	for (u64 i = 0; i < p.terms; i++) {
 		uinf_zero(swap);
 		uinf_mul(swap, out, x);
-		uinf_rshift(swap, exp);
+		uinf_rshift(swap, x_exp);
 		uinf_zero(out);
 		uinf c = poly_index(p, p.terms - i - 1);
 		uinf_add(out, swap, c);
 	}
 }
 
+// solve (p-f)'(x) = 0 by iterating
+// x = g(cp(x))
+// where f'(g(cx)) = x
+// e.g. f = sin, f' = 2pi*cos, g = arccos, c = 1/2pi
+// i.e. root_find(out, diff(p), arccos, reciprocol_twopi());
+void root_find(
+	uinf out, u64 out_exp,
+	poly p, u64 p_exp,
+	void (*g)(uinf, uinf),
+	uinf c, u64 c_exp
+) {
+	bool converged = false;
+	while (!converged) {
+	float root_f = uinf_read64(out);
+	root_f /= SQRTMAX64;
+	root_f /= SQRTMAX64;
+	printf("root = %llu, i.e. %f\n", uinf_read64(out), root_f);
+		UINF_ALLOCA(prev, out.size);
+		for (u64 i = 0; i < out.size; i++) {
+			prev.data[i] = out.data[i];
+		}
+
+		UINF_ALLOCA(px, out.size);
+		uinf_zero(px);
+		poly_eval(px, p, out, out_exp);
+	printf("px = %llu\n", uinf_read64(px));
+
+		UINF_ALLOCA(cpx, out.size + c.size);
+		uinf_zero(cpx);
+		uinf_mul(cpx, px, c);
+		uinf_rshift(cpx, p_exp + c_exp);
+	printf("cpx = %llu\n", uinf_read64(cpx));
+
+		uinf_zero(out);
+		g(out, cpx);
+
+		converged = true;
+		for (u64 i = 0; i < out.size; i++) {
+			if (out.data[i] != prev.data[i]) {
+				converged = false;
+			}
+		}
+	}
+}
+
 //////////////////////////////
 // tests/entry point
+
+void reciprocol_twopi(uinf out) {
+	UINF_ALLOCA(x, out.size * 2);
+	uinf_zero(x);
+	UINF_ALLOCA(y, out.size * 2);
+	uinf_zero(y);
+	y.data[out.size] = 1;
+	arctan(x, y);
+	for (size_t i = 0; i < out.size; i++) {
+		out.data[i] = x.data[i];
+	}
+}
+
+void root_find_test() {
+	const u64 p_exp = 16;
+#define CS 3
+	struct coeff {
+		u64 n;
+		u64 d;
+		bool sign;
+	} cs[CS] = {
+		{0, 1, true},
+		{0, 1, true},
+		{1, 100, true},
+	};
+	POLY_ALLOCA(p, 3, 2);
+	POLY_ALLOCA(dp, 3, 2);
+	for (u64 i = 0; i < CS; i++) {
+		u64 c = cs[i].n;
+		c <<= p_exp;
+		c /= cs[i].d;
+		if (!cs[i].sign) {
+			c = (~c)+1;
+		}
+		uinf_assign64(poly_index(p, i), c);
+		uinf_assign64(poly_index(dp, i), c);
+	}
+	poly_diff(dp);
+
+	UINF_ALLOCA(r2pi, 2);
+	reciprocol_twopi(r2pi);
+	
+	UINF_ALLOCA(root, 2);
+	uinf_assign64(root, 1llu << 32);
+	root_find(root, 32*root.size, dp, p_exp, arccos, r2pi, 32*r2pi.size);
+	float root_f = uinf_read64(root);
+	root_f /= SQRTMAX64;
+	root_f /= SQRTMAX64;
+	printf("root = %llu, i.e. %f\n", uinf_read64(root), root_f);
+}
 
 void poly_test() {
 #define CS 3
@@ -594,18 +689,6 @@ void references_test() {
 	}
 }
 
-void reciprocol_twopi(uinf out) {
-	UINF_ALLOCA(x, out.size * 2);
-	uinf_zero(x);
-	UINF_ALLOCA(y, out.size * 2);
-	uinf_zero(y);
-	y.data[out.size] = 1;
-	arctan(x, y);
-	for (size_t i = 0; i < out.size; i++) {
-		out.data[i] = x.data[i];
-	}
-}
-
 void test_pi() {
 	UINF_ALLOCA(data, 2);
 	reciprocol_twopi(data);
@@ -618,8 +701,9 @@ void test_pi() {
 }
 
 int main() {
-	poly_test();
 	//references_test();
 	//test_pi();
+	poly_test();
+	root_find_test();
 }
 
