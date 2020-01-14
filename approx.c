@@ -308,54 +308,28 @@ void arcspread(uinf x, uinf s) {
 	//                       = cos^2(2theta)
 	//                       = 1 - sin^2(2theta)
 	const u64 n = x.size * 32;
-	bool prev_domain = false;
-	bool prev_digit = false;
-	if (s.data[s.size - 1] & HALFMAX32) {
-		prev_domain = true;
-		prev_digit = true;
-		uinf_inc(x);
-	}
-	u64 exp = 0;
+	UINF_ALLOCA(negs, s.size);
 	UINF_ALLOCA(out, 2 * s.size);
-	for (u64 i = 0; i < n-3; i++) {
-		if (0) {
-			printf("sin^2(t*2^%llu) = %llu; exp = %llu\n", i, uinf_read64(s), exp);
+	bool shift = false;
+	for (u64 i = 0; i < n-2; i++) {
+		shift = s.data[s.size - 1] & HALFMAX32;
+		for (size_t j = 0; j < s.size; j++) {
+			negs.data[j] = s.data[j];
 		}
+		uinf_negate(negs);
+
 		uinf_zero(out);
-		uinf_mul(out, s, s);
-		uinf_rshift(out, exp);
-		uinf_negate(out);
-		uinf out_hi = {s.size, out.data + s.size};
-		uinf_add(out_hi, out_hi, s);
+		uinf_mul(out, s, negs);
 
 		uinf_lshift(x, 1);
-		while (!(out.data[out.size - 1] & HALFMAX32)) {
-			uinf_lshift(out, 1);
-			exp += 1;
+		uinf_lshift(out, 2);
+		if (shift) {
+			uinf_negate(out);
+			uinf_inc(x);
 		}
-		if (exp < 2) {
-			printf("Overflow\n");
-		}
-		exp -= 2;
-		{
-			bool this_domain = (exp == 0);
-			bool this_digit = this_domain != prev_digit;
-			if (this_domain) {
-				uinf_negate(out);
-			}
-			if (this_digit) {
-				uinf_inc(x);
-			}
-			prev_domain = this_domain;
-			prev_digit = this_digit;
-		}
-		while (!(out.data[out.size - 1] & HALFMAX32)) {
-			uinf_lshift(out, 1);
-			exp += 1;
-		}
-
 		for (size_t j = 0; j < s.size; j++) {
 			s.data[j] = out.data[j + s.size];
+			negs.data[j] = out.data[j + s.size];
 		}
 	}
 }
@@ -366,8 +340,8 @@ void arcsin(uinf x, uinf y) {
 	UINF_ALLOCA(out, 2 * y.size);
 	uinf_zero(out);
 	uinf_mul(out, y, y);
-	uinf s = {y.size, out.data + y.size};
-	arcspread(x, out);
+	uinf s = {y.size + 1, out.data + y.size - 1};
+	arcspread(x, s);
 }
 
 // modifies x but not y
@@ -376,9 +350,9 @@ void arccos(uinf x, uinf y) {
 	UINF_ALLOCA(out, 2 * y.size);
 	uinf_zero(out);
 	uinf_mul(out, y, y);
-	uinf_negate(out);
-	uinf s = {y.size, out.data + y.size};
-	arcspread(x, out);
+	uinf s = {y.size + 1, out.data + y.size - 1};
+	uinf_negate(s);
+	arcspread(x, s);
 }
 
 // x = -log_2(y)-1
@@ -458,12 +432,9 @@ void test() {
 		{0.51F, 1384611644667422749, 1571243910720920770, 3040442107706467133, 17919736732383054105U},
 		{0.5625F, 1504319350508084718, 1753919825228814155, 2857766193198573748, 15312181060378489024U},
 		{0.0078125F, 22936177926750894, 22936877886913355, 4588749140540474548, 0},
-		{0.2F, 0, 0, 0, 0},
-		{0.4F, 0, 1208168419403369306, 0, 0},
-		// changing these values seems to change the output of asin...
-		// memory bug?
-		// {0.75F, 1889248794157641523, 2489817403875320550, 2121868614552067353, 0},
-		{0.75F, 0, 2489817403875320550, 0, 0},
+		{0.2F, 579531757966409893, 591164816339000973, 4020521202088386930, 5938524779959067349},
+		{0.4F, 1117125074088010363, 1208168419403369306, 3403517599024018597, 5938524779959067349},
+		{0.75F, 1889248794157641523, 2489817403875320550, 2121868614552067353, 7656090530189244512},
 	};
 	for (int j = 0; j < YS; j++) {
 		float y = tests[j].y;
@@ -562,6 +533,6 @@ int main() {
 	data_f /= SQRTMAX64;
 	data_f /= SQRTMAX64;
 	printf("1/2pi = %llu\n", data_u);
-	printf("i.e. pi = %.8f\n", 0.5f / data_f);
+	printf("i.e. pi = %.8f\n", 0.5F / data_f);
 }
 
