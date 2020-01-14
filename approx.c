@@ -40,8 +40,8 @@ void uinf_assign64(uinf out, u64 x) {
 }
 
 u64 uinf_read64(uinf x) {
-	u64 hi = x.data[x.size-1];
-	u64 lo = x.data[x.size-2];
+	u64 hi = x.data[1];
+	u64 lo = x.data[0];
 	return (hi << 32) | lo;
 }
 
@@ -144,8 +144,8 @@ bool uinf_lss(uinf x, uinf y) {
 }
 
 void uinf_rshift(uinf x, u64 shift) {
-	shift %= 32;
 	u64 shift_hi = shift / 32;
+	shift %= 32;
 	const u32 mask = (1 << shift) - 1;
 	u32 prev_carry = 0;
 	u64 i = x.size;
@@ -155,6 +155,9 @@ void uinf_rshift(uinf x, u64 shift) {
 		x.data[i] >>= shift;
 		x.data[i] |= prev_carry << (32 - shift);
 		prev_carry = carry;
+	}
+	if (shift_hi == 0) {
+		return;
 	}
 	for (u64 j = 0; j < x.size; j++) {
 		if (j < x.size - shift_hi) {
@@ -166,14 +169,19 @@ void uinf_rshift(uinf x, u64 shift) {
 }
 
 void uinf_lshift(uinf x, u64 shift) {
-	shift %= 32;
 	u64 shift_hi = shift / 32;
-	u32 prev_carry = 0;
-	for (u64 i = 0; i < x.size; i++) {
-		u32 carry = x.data[i] >> (32 - shift);
-		x.data[i] <<= shift;
-		x.data[i] |= prev_carry;
-		prev_carry = carry;
+	shift %= 32;
+	if (shift) {
+		u32 prev_carry = 0;
+		for (u64 i = 0; i < x.size; i++) {
+			u32 carry = x.data[i] >> (32 - shift);
+			x.data[i] <<= shift;
+			x.data[i] |= prev_carry;
+			prev_carry = carry;
+		}
+	}
+	if (shift_hi == 0) {
+		return;
 	}
 	u64 i = x.size;
 	while (i > 0) {
@@ -422,13 +430,14 @@ Unit tan_bisect(Unit x) {
 
 typedef struct {
 	u64 terms;
+	u64 exp;
 	u64 size;
 	u32 *data;
 } poly;
 
-#define POLY_ALLOCA(name, terms, size) \
+#define POLY_ALLOCA(name, terms, exp, size) \
 u32 name##_data[(terms) * (size)];\
-poly name = {terms, size, name##_data};
+poly name = {terms, exp, size, name##_data};
 
 uinf poly_index(poly p, u64 i) {
 	return (uinf){p.size, &p.data[p.size * i]};
@@ -458,8 +467,17 @@ void poly_eval(uinf out, poly p, uinf x, u64 x_exp) {
 		uinf_mul(swap, out, x);
 		uinf_rshift(swap, x_exp);
 		uinf_zero(out);
+		for (u64 i = 0; i < swap.size && i < out.size; i++) {
+			out.data[i] = swap.data[i];
+		}
+		uinf_zero(swap);
 		uinf c = poly_index(p, p.terms - i - 1);
-		uinf_add(out, swap, c);
+		for (u64 i = 0; i < c.size; i++) {
+			swap.data[i] = c.data[i];
+		}
+		uinf_lshift(swap, x_exp);
+		uinf_rshift(swap, p.exp);
+		uinf_add(out, out, swap);
 	}
 }
 
@@ -470,31 +488,29 @@ void poly_eval(uinf out, poly p, uinf x, u64 x_exp) {
 // i.e. root_find(out, diff(p), arccos, reciprocol_twopi());
 void root_find(
 	uinf out, u64 out_exp,
-	poly p, u64 p_exp,
+	poly p,
 	void (*g)(uinf, uinf),
-	uinf c, u64 c_exp
+	uinf c, u64 cp_exp
 ) {
 	bool converged = false;
 	while (!converged) {
 	float root_f = uinf_read64(out);
 	root_f /= SQRTMAX64;
 	root_f /= SQRTMAX64;
-	printf("root = %llu, i.e. %f\n", uinf_read64(out), root_f);
 		UINF_ALLOCA(prev, out.size);
 		for (u64 i = 0; i < out.size; i++) {
 			prev.data[i] = out.data[i];
 		}
 
-		UINF_ALLOCA(px, out.size);
+		UINF_ALLOCA(px, out.size+1);
 		uinf_zero(px);
 		poly_eval(px, p, out, out_exp);
-	printf("px = %llu\n", uinf_read64(px));
 
-		UINF_ALLOCA(cpx, out.size + c.size);
+		UINF_ALLOCA(cpx, out.size + 1 + c.size);
 		uinf_zero(cpx);
 		uinf_mul(cpx, px, c);
-		uinf_rshift(cpx, p_exp + c_exp);
-	printf("cpx = %llu\n", uinf_read64(cpx));
+		uinf_rshift(cpx, cp_exp);
+		cpx.size = out.size;
 
 		uinf_zero(out);
 		g(out, cpx);
@@ -532,11 +548,11 @@ void root_find_test() {
 		bool sign;
 	} cs[CS] = {
 		{0, 1, true},
+		{1, 4, true},
 		{0, 1, true},
-		{1, 100, true},
 	};
-	POLY_ALLOCA(p, 3, 2);
-	POLY_ALLOCA(dp, 3, 2);
+	POLY_ALLOCA(p, 3, p_exp, 2);
+	POLY_ALLOCA(dp, 3, p_exp, 2);
 	for (u64 i = 0; i < CS; i++) {
 		u64 c = cs[i].n;
 		c <<= p_exp;
@@ -551,10 +567,11 @@ void root_find_test() {
 
 	UINF_ALLOCA(r2pi, 2);
 	reciprocol_twopi(r2pi);
+	printf("r2pi = %llu\n", uinf_read64(r2pi));
 	
 	UINF_ALLOCA(root, 2);
-	uinf_assign64(root, 1llu << 32);
-	root_find(root, 32*root.size, dp, p_exp, arccos, r2pi, 32*r2pi.size);
+	uinf_assign64(root, 1llu << 61);
+	root_find(root, 32*root.size, dp, arccos, r2pi, 32*r2pi.size);
 	float root_f = uinf_read64(root);
 	root_f /= SQRTMAX64;
 	root_f /= SQRTMAX64;
@@ -564,7 +581,7 @@ void root_find_test() {
 void poly_test() {
 #define CS 3
 	const u64 cs[CS] = {200, 2000000, 5000000000000};
-	POLY_ALLOCA(p, 3, 2);
+	POLY_ALLOCA(p, 3, 0, 2);
 	for (u64 i = 0; i < CS; i++) {
 		uinf_assign64(poly_index(p, i), cs[i]);
 	}
