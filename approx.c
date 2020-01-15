@@ -33,6 +33,12 @@ void uinf_zero(uinf out) {
 	}
 }
 
+void uinf_negative_one(uinf out) {
+	for (u64 i = 0; i < out.size; i++) {
+		out.data[i] = ~0;
+	}
+}
+
 void uinf_assign64(uinf out, u64 x) {
 	uinf_zero(out);
 	out.data[out.size - 2] = x & LO;
@@ -48,6 +54,30 @@ u64 uinf_read64(uinf x) {
 void uinf_halfmax(uinf out) {
 	uinf_zero(out);
 	out.data[out.size - 1] = HALFMAX32;
+}
+
+// @Cleanup actually use these instead of putting for loops everywhere?
+// @Performance don't do that?
+void uinf_write_high(uinf out, uinf in) {
+	u64 offset = out.size - in.size;
+	for (u64 i = 0; i < in.size && i < out.size; i++) {
+		out.data[i + offset] = in.data[i];
+	}
+}
+
+void uinf_write_low(uinf out, uinf in) {
+	for (u64 i = 0; i < in.size && i < out.size; i++) {
+		out.data[i] = in.data[i];
+	}
+}
+
+void uinf_write_signed(uinf out, uinf in) {
+	if (in.data[in.size - 1] & HALFMAX32) {
+		uinf_negative_one(out);
+	} else {
+		uinf_zero(out);
+	}
+	uinf_write_low(out, in);
 }
 
 // perfectly safe to set any of these equal,
@@ -165,6 +195,17 @@ void uinf_rshift(uinf x, u64 shift) {
 		} else {
 			x.data[j] = 0;
 		}
+	}
+}
+
+void uinf_rshift_signed(uinf x, u64 shift) {
+	bool neg = x.data[x.size - 1] & HALFMAX32;
+	if (neg) {
+		uinf_negate(x);
+	}
+	uinf_rshift(x, shift);
+	if (neg) {
+		uinf_negate(x);
 	}
 }
 
@@ -363,6 +404,18 @@ void arccos(uinf x, uinf y) {
 	arcspread(x, s);
 }
 
+/*
+void arccos_signed(uinf x, uinf y) {
+	bool neg = y.data[y.size - 1] & HALFMAX32;
+	uinf_lshift(y, 1);
+	arccos(x, y);
+	if (neg) {
+		uinf_negate(x);
+		x.data[x.size - 1] ^= HALFMAX32;
+	}
+}
+*/
+
 // x = -log_2(y)-1
 // modifies x and y
 // assumes x is initially 0
@@ -463,20 +516,19 @@ void poly_diff(poly p) {
 void poly_eval(uinf out, poly p, uinf x, u64 x_exp) {
 	UINF_ALLOCA(swap, p.size + x.size);
 	for (u64 i = 0; i < p.terms; i++) {
+		// out *= x
 		uinf_zero(swap);
 		uinf_mul(swap, out, x);
 		uinf_rshift(swap, x_exp);
 		uinf_zero(out);
-		for (u64 i = 0; i < swap.size && i < out.size; i++) {
-			out.data[i] = swap.data[i];
-		}
+		uinf_write_low(out, swap);
+
+		// out += c
 		uinf_zero(swap);
 		uinf c = poly_index(p, p.terms - i - 1);
-		for (u64 i = 0; i < c.size; i++) {
-			swap.data[i] = c.data[i];
-		}
+		uinf_write_signed(swap, c);
 		uinf_lshift(swap, x_exp);
-		uinf_rshift(swap, p.exp);
+		uinf_rshift_signed(swap, p.exp);
 		uinf_add(out, out, swap);
 	}
 }
@@ -494,9 +546,6 @@ void root_find(
 ) {
 	bool converged = false;
 	while (!converged) {
-	float root_f = uinf_read64(out);
-	root_f /= SQRTMAX64;
-	root_f /= SQRTMAX64;
 		UINF_ALLOCA(prev, out.size);
 		for (u64 i = 0; i < out.size; i++) {
 			prev.data[i] = out.data[i];
@@ -542,22 +591,24 @@ void reciprocol_twopi(uinf out) {
 void root_find_test() {
 	const u64 p_exp = 16;
 #define CS 3
+	// 1- (4x-1)^2
+	// -16x^2 +8x
 	struct coeff {
 		u64 n;
 		u64 d;
-		bool sign;
-	} cs[CS] = {
-		{0, 1, true},
-		{1, 4, true},
-		{0, 1, true},
+		bool neg;
+	} const cs[CS] = {
+		{0, 1, false},
+		{8, 1, false},
+		{16, 1, true},
 	};
-	POLY_ALLOCA(p, 3, p_exp, 2);
-	POLY_ALLOCA(dp, 3, p_exp, 2);
+	POLY_ALLOCA(p, CS, p_exp, 2);
+	POLY_ALLOCA(dp, CS, p_exp, 2);
 	for (u64 i = 0; i < CS; i++) {
 		u64 c = cs[i].n;
 		c <<= p_exp;
 		c /= cs[i].d;
-		if (!cs[i].sign) {
+		if (cs[i].neg) {
 			c = (~c)+1;
 		}
 		uinf_assign64(poly_index(p, i), c);
