@@ -546,6 +546,7 @@ void root_find(
 ) {
 	bool converged = false;
 	while (!converged) {
+		printf("%llu\n", uinf_read64(out));
 		UINF_ALLOCA(prev, out.size);
 		for (u64 i = 0; i < out.size; i++) {
 			prev.data[i] = out.data[i];
@@ -590,7 +591,7 @@ void reciprocol_twopi(uinf out) {
 
 void root_find_test() {
 	const u64 p_exp = 16;
-#define CS 3
+#define CS 4
 	// 1- (4x-1)^2
 	// -16x^2 +8x
 	struct coeff {
@@ -600,7 +601,8 @@ void root_find_test() {
 	} const cs[CS] = {
 		{0, 1, false},
 		{8, 1, false},
-		{16, 1, true},
+		{24, 1, true},
+		{32, 1, false},
 	};
 	POLY_ALLOCA(p, CS, p_exp, 2);
 	POLY_ALLOCA(dp, CS, p_exp, 2);
