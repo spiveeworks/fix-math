@@ -538,7 +538,7 @@ void poly_eval(uinf out, poly p, uinf x, u64 x_exp) {
 // where f'(g(cx)) = x
 // e.g. f = sin, f' = 2pi*cos, g = arccos, c = 1/2pi
 // i.e. root_find(out, diff(p), arccos, reciprocol_twopi());
-void root_find(
+void critical_point_find(
     uinf out, u64 out_exp,
     poly p,
     void (*g)(uinf, uinf),
@@ -589,7 +589,7 @@ void reciprocol_twopi(uinf out) {
     }
 }
 
-void root_find_test() {
+void critical_point_find_test() {
     const u64 p_exp = 16;
 #define CS 4
     // 1- (4x-1)^2
@@ -622,10 +622,10 @@ void root_find_test() {
     UINF_ALLOCA(r2pi, 2);
     reciprocol_twopi(r2pi);
     printf("r2pi = %llu\n", uinf_read64(r2pi));
-    
+
     UINF_ALLOCA(root, 2);
     uinf_assign64(root, 1llu << 61);
-    root_find(root, 32*root.size, dp, arccos, r2pi, 32*r2pi.size);
+    critical_point_find(root, 32*root.size, dp, arccos, r2pi, 32*r2pi.size);
     float root_f = uinf_read64(root);
     root_f /= SQRTMAX64;
     root_f /= SQRTMAX64;
@@ -772,10 +772,75 @@ void test_pi() {
     printf("i.e. pi = %.8f\n", 0.5F / data_f);
 }
 
+u32 arctan32(u32 x) {
+    u32 y = 0;
+    arctan((uinf){1,&y},(uinf){1,&x});
+    return y;
+}
+
+u32 neglog32(u32 x) {
+    u32 y = 0;
+    neglog2((uinf){1,&y},(uinf){1,&x});
+    return y;
+}
+
+u32 arcspread32(u32 x) {
+    u32 y = 0;
+    arcspread((uinf){1,&y},(uinf){1,&x});
+    return y;
+}
+
+u32 arcsin32(u32 x) {
+    u32 y = 0;
+    arcsin((uinf){1,&y},(uinf){1,&x});
+    return y;
+}
+
+u32 arccos32(u32 x) {
+    u32 y = 0;
+    arccos((uinf){1,&y},(uinf){1,&x});
+    return y;
+}
+
+#define IMAGE_WIDTH 512UL
+#define IMAGE_HEIGHT 512UL
+
+void render(char *name, u32 (*f)(u32), u64 arg_scale, u64 val_scale) {
+    static u64 ys[IMAGE_WIDTH];
+    for (size_t i = 0; i < IMAGE_WIDTH; i++) {
+        u64 x = i * (arg_scale-2) / (IMAGE_WIDTH-1) + 1;
+        ys[i] = f(x);  // scaling down and then back up
+    }
+    FILE *out = fopen(name, "wb");
+    const u64 bright = 255;
+    fprintf(out, "P6 %lu %lu %lu ", IMAGE_WIDTH, IMAGE_HEIGHT, bright);
+    for (size_t j = 0; j < IMAGE_HEIGHT; j++) {
+        for (size_t i = 0; i < IMAGE_WIDTH; i++) {
+            u64 y0 = ys[i] * (IMAGE_HEIGHT - 1) / val_scale;
+            int val = 0;
+            if ((IMAGE_HEIGHT-1 - j) > y0) {
+                val = bright;
+            } else if ((IMAGE_HEIGHT-1 - j) == y0) {
+                u64 rem = ys[i] * (IMAGE_HEIGHT - 1) % val_scale;
+                val = bright - rem * bright / val_scale;
+            }
+            fputc(val, out);
+            fputc(val, out);
+            fputc(val, out);
+        }
+    }
+    fclose(out);
+}
+
 int main() {
     //references_test();
     //test_pi();
-    poly_test();
-    root_find_test();
+    //poly_test();
+    //critical_point_find_test();
+    render("arctan.ppg", arctan32, SQRTMAX64, SQRTMAX64/8);
+    render("neglogb.ppg", neglog32, SQRTMAX64, SQRTMAX64);
+    render("arcspread.ppg", arcspread32, SQRTMAX64, SQRTMAX64/4);
+    render("arcsin.ppg", arcsin32, SQRTMAX64, SQRTMAX64/4);
+    render("arccos.ppg", arccos32, SQRTMAX64, SQRTMAX64/4);
 }
 
