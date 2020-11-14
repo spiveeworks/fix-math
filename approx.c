@@ -162,15 +162,15 @@ void uinf_sub(uinf out, uinf x, uinf y) {
     }
 }
 
-bool uinf_lss(uinf x, uinf y) {
+signed uinf_cmp(uinf x, uinf y) {
     u64 i = x.size < y.size ? y.size : x.size;
     while (i > 0) {
         i--;
         u32 xi = i < x.size ? x.data[i] : 0;
         u32 yi = i < y.size ? y.data[i] : 0;
-        if (xi != yi) return xi < yi;
+        if (xi != yi) return xi < yi ? -1 : +1;
     }
-    return false;
+    return 0;
 }
 
 void uinf_rshift(uinf x, u64 shift) {
@@ -416,7 +416,7 @@ void arccos_signed(uinf x, uinf y) {
 }
 */
 
-// x = -log_2(y)-1
+// x = -log_2(y) mod 1
 // modifies x and y
 // assumes x is initially 0
 void neglog2(uinf x, uinf y) {
@@ -430,7 +430,7 @@ void neglog2(uinf x, uinf y) {
         // floor instead of ceil(x-1)
         if (y.data[0] == 0 && y.data[1] == HALFMAX32) {
             uinf_inc(x);
-            // double y to get 1, which is a fixpoint of _^2
+            // double y to get 1, which is a fixpoint y = y^2
             // so just finish doubling x and return
             uinf_lshift(x, n - i);
             return;
@@ -450,33 +450,57 @@ void neglog2(uinf x, uinf y) {
     }
 }
 
-/*
-bool tan_cut(Unit x, Unit y) {
-    // y < tan(x)
-    // arctan(y) < x
-    return unit_lss(arctan(y), x);
+// x = log_2(1 + y)
+void log2(uinf x, uinf y) {
+    uinf_rshift(y, 1);
+    y.data[y.size-1] |= 1U << 31U;
+    // 0.5+y/2 is now in the range [0.5, 1), so -log(0.5+y/5) in [-1, 0)
+    // so mod 1 we get x = -log(0.5+y/2)+1 = -log(1+y)
+    neglog2(x, y);
+    // negate x and return
+    uinf_negate(x);
 }
 
-Unit bisect(bool (*f_cut)(Unit, Unit), Unit x) {
-    Unit y = UNIT_HALF;
-    Unit delta = unit_rshift(y, 1);
-    while (u64_from_unit(delta)) {
-        if (f_cut(x, y)) {
-            // increase while below the cut
-            y = unit_add(y, delta);
-        } else {
-            // decrease while above the cut
-            y = unit_sub(y, delta);
+/* left in for reference when reading the more generalized uinf bisection
+ *
+u32 bisect32(u32 (*f)(u32), u32 y, bool increasing) {
+    u32 b = 1U << 31;
+    u32 x = 0;
+    for (u32 b = 1U << 31; b != 0; b >>= 1) {
+        if (f(x | b) == y) {
+            return x | b;
         }
-        delta = unit_rshift(delta, 1);
+        bool toolow = f(x | b) < y;
+        if (toolow == increasing) {
+            x |= b;
+        }
     }
-    return y;
-}
-
-Unit tan_bisect(Unit x) {
-    return bisect(tan_cut, x);
+    return x;
 }
 */
+
+// finds x so that f(x) = y
+void bisect(void (*f)(uinf, uinf), uinf x, uinf y, bool increasing) {
+    UINF_ALLOCA(yc, y.size)
+    UINF_ALLOCA(newx, x.size)
+    uinf_zero(x);
+    for (long i = x.size-1; i >= 0; i--) {
+        for (int j = 31; j >= 0; j--) {
+            uinf_write_low(newx, x);
+            newx.data[i] |= 1U << j;
+            uinf_zero(yc);
+            f(yc, newx);
+            signed cmp = uinf_cmp(yc, y);
+            if (cmp == 0) {
+                x.data[i] |= 1U << j;
+                return;
+            }
+            if ((cmp < 0) == increasing) {
+                x.data[i] |= 1U << j;
+            }
+        }
+    }
+}
 
 //////////////////////////////
 // polynomial
@@ -778,9 +802,9 @@ u32 arctan32(u32 x) {
     return y;
 }
 
-u32 neglog32(u32 x) {
+u32 log32(u32 x) {
     u32 y = 0;
-    neglog2((uinf){1,&y},(uinf){1,&x});
+    log2((uinf){1,&y},(uinf){1,&x});
     return y;
 }
 
@@ -802,31 +826,78 @@ u32 arccos32(u32 x) {
     return y;
 }
 
+u32 tan32(u32 x) {
+    u32 y = 0;
+    bisect(arctan, (uinf){1,&y}, (uinf){1,&x}, true);
+    return y;
+}
+
+u32 powb32(u32 x) {
+    u32 y = 0;
+    bisect(log2, (uinf){1,&y}, (uinf){1,&x}, true);
+    return y;
+}
+
+u32 spread32(u32 x) {
+    u32 y = 0;
+    bisect(arcspread, (uinf){1,&y}, (uinf){1,&x}, true);
+    return y;
+}
+
+u32 sin32(u32 x) {
+    u32 y = 0;
+    bisect(arcsin, (uinf){1,&y}, (uinf){1,&x}, true);
+    return y;
+}
+
+u32 cos32(u32 x) {
+    u32 y = 0;
+    bisect(arccos, (uinf){1,&y}, (uinf){1,&x}, false);
+    return y;
+}
+
 #define IMAGE_WIDTH 512UL
 #define IMAGE_HEIGHT 512UL
 
-void render(char *name, u32 (*f)(u32), u64 arg_scale, u64 val_scale) {
+void render(char *name, u32 (*f)(u32), u32 (*g)(u32), u64 yscale, u64 xscale) {
     static u64 ys[IMAGE_WIDTH];
     for (size_t i = 0; i < IMAGE_WIDTH; i++) {
-        u64 x = i * (arg_scale-2) / (IMAGE_WIDTH-1) + 1;
-        ys[i] = f(x);  // scaling down and then back up
+        u64 x = i * (xscale-2) / (IMAGE_WIDTH-1) + 1;
+        ys[i] = f(x);
     }
+    static u64 xs[IMAGE_HEIGHT];
+    for (size_t j = 0; j < IMAGE_HEIGHT; j++) {
+        u64 y = (IMAGE_HEIGHT - 1 - j) * (yscale-2) / (IMAGE_WIDTH-1) + 1;
+        xs[j] = g(y);
+    }
+    bool increasing = ys[3*IMAGE_WIDTH/4] > ys[IMAGE_WIDTH/4];
     FILE *out = fopen(name, "wb");
     const u64 bright = 255;
     fprintf(out, "P6 %lu %lu %lu ", IMAGE_WIDTH, IMAGE_HEIGHT, bright);
     for (size_t j = 0; j < IMAGE_HEIGHT; j++) {
+        u64 x0 = xs[j] * (IMAGE_WIDTH - 1) / xscale;
         for (size_t i = 0; i < IMAGE_WIDTH; i++) {
-            u64 y0 = ys[i] * (IMAGE_HEIGHT - 1) / val_scale;
-            int val = 0;
-            if ((IMAGE_HEIGHT-1 - j) > y0) {
-                val = bright;
+            u64 y0 = ys[i] * (IMAGE_HEIGHT - 1) / yscale;
+            int red = 0;
+            if ((IMAGE_HEIGHT-1 - j) < y0) {
+                red = bright;
             } else if ((IMAGE_HEIGHT-1 - j) == y0) {
-                u64 rem = ys[i] * (IMAGE_HEIGHT - 1) % val_scale;
-                val = bright - rem * bright / val_scale;
+                u64 rem = ys[i] * (IMAGE_HEIGHT - 1) % yscale;
+                red = rem * bright / yscale;
             }
-            fputc(val, out);
-            fputc(val, out);
-            fputc(val, out);
+            int cyan = 0;
+            if (i < x0) {
+                cyan = bright;
+            } else if (i == x0) {
+                u64 rem = xs[j] * (IMAGE_WIDTH - 1) % xscale;
+                cyan = rem * bright / xscale;
+            }
+            if (increasing) {
+                cyan = bright - cyan;
+            }
+            fputc(red, out);
+            fputc(cyan, out);
+            fputc(cyan, out);
         }
     }
     fclose(out);
@@ -837,10 +908,10 @@ int main() {
     //test_pi();
     //poly_test();
     //critical_point_find_test();
-    render("arctan.ppg", arctan32, SQRTMAX64, SQRTMAX64/8);
-    render("neglogb.ppg", neglog32, SQRTMAX64, SQRTMAX64);
-    render("arcspread.ppg", arcspread32, SQRTMAX64, SQRTMAX64/4);
-    render("arcsin.ppg", arcsin32, SQRTMAX64, SQRTMAX64/4);
-    render("arccos.ppg", arccos32, SQRTMAX64, SQRTMAX64/4);
+    render("tan.ppg", tan32, arctan32, SQRTMAX64, SQRTMAX64/8);
+    render("powb.ppg", powb32, log32, SQRTMAX64, SQRTMAX64);
+    render("spread.ppg", spread32, arcspread32, SQRTMAX64, SQRTMAX64/4);
+    render("sin.ppg", sin32, arcsin32, SQRTMAX64, SQRTMAX64/4);
+    render("cos.ppg", cos32, arccos32, SQRTMAX64, SQRTMAX64/4);
 }
 
