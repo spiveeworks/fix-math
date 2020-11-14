@@ -1,7 +1,7 @@
 #include <stdio.h>
 
 typedef unsigned u32;
-typedef long long unsigned u64;
+typedef long unsigned u64;
 
 const u32 HALFMAX32 = (u32)1 << 31;
 const u64 SQRTMAX64 = (u64)1 << 32;
@@ -39,13 +39,25 @@ void uinf_negative_one(uinf out) {
     }
 }
 
-void uinf_assign64(uinf out, u64 x) {
+void uinf_assign64_high(uinf out, u64 x) {
     uinf_zero(out);
     out.data[out.size - 2] = x & LO;
     out.data[out.size - 1] = x >> 32;
 }
 
-u64 uinf_read64(uinf x) {
+u64 uinf_read64_high(uinf x) {
+    u64 hi = x.data[x.size-1];
+    u64 lo = x.data[x.size-2];
+    return (hi << 32) | lo;
+}
+
+void uinf_assign64_low(uinf out, u64 x) {
+    uinf_zero(out);
+    out.data[0] = x & LO;
+    out.data[1] = x >> 32;
+}
+
+u64 uinf_read64_low(uinf x) {
     u64 hi = x.data[1];
     u64 lo = x.data[0];
     return (hi << 32) | lo;
@@ -310,12 +322,6 @@ void rot_mul(Rotation *out, Rotation z1, Rotation z2) {
 //////////////////////////////
 // reference functions
 
-// dedekind cuts represent real numbers as the set of rational numbers smaller
-// than them
-// so tan(x) as a cut is the set {y : y < tan(x)}
-// so our convention is f_cut(x, y) <=> y < f(x)
-// such that currying f_cut would actually give a function Rat->Real
-
 // x = arctan(y)
 // modifies x and y
 // assumes x is initially 0
@@ -537,13 +543,20 @@ void poly_diff(poly p) {
     uinf_zero(poly_index(p, p.terms - 1));
 }
 
-void poly_eval(uinf out, poly p, uinf x, u64 x_exp) {
+void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
+    uinf_zero(out);
     UINF_ALLOCA(swap, p.size + x.size);
-    for (u64 i = 0; i < p.terms; i++) {
+    printf("\nout = 0\n");
+    for (long i = 0; i < p.terms; i++) {
         // out *= x
         uinf_zero(swap);
         uinf_mul(swap, out, x);
-        uinf_rshift(swap, x_exp);
+        uinf_rshift_signed(swap, x_exp);
+        printf("out = %ld*%ld>>%ld = %ld\n",
+                uinf_read64_low(out),
+                uinf_read64_low(x),
+                x_exp, uinf_read64_low(swap)
+        );
         uinf_zero(out);
         uinf_write_low(out, swap);
 
@@ -551,9 +564,13 @@ void poly_eval(uinf out, poly p, uinf x, u64 x_exp) {
         uinf_zero(swap);
         uinf c = poly_index(p, p.terms - i - 1);
         uinf_write_signed(swap, c);
-        uinf_lshift(swap, x_exp);
+        uinf_lshift(swap, out_exp);
         uinf_rshift_signed(swap, p.exp);
         uinf_add(out, out, swap);
+        printf("+%ld = %ld\n",
+                uinf_read64_low(swap),
+                uinf_read64_low(out)
+        );
     }
 }
 
@@ -570,7 +587,7 @@ void critical_point_find(
 ) {
     bool converged = false;
     while (!converged) {
-        printf("%llu\n", uinf_read64(out));
+        printf("%lu\n", uinf_read64_high(out));
         UINF_ALLOCA(prev, out.size);
         for (u64 i = 0; i < out.size; i++) {
             prev.data[i] = out.data[i];
@@ -578,7 +595,7 @@ void critical_point_find(
 
         UINF_ALLOCA(px, out.size+1);
         uinf_zero(px);
-        poly_eval(px, p, out, out_exp);
+        poly_eval(px, p, out, out_exp, out_exp);
 
         UINF_ALLOCA(cpx, out.size + 1 + c.size);
         uinf_zero(cpx);
@@ -637,23 +654,23 @@ void critical_point_find_test() {
         if (cs[i].neg) {
             c = (~c)+1;
         }
-        uinf_assign64(poly_index(p, i), c);
-        uinf_assign64(poly_index(dp, i), c);
+        uinf_assign64_high(poly_index(p, i), c);
+        uinf_assign64_high(poly_index(dp, i), c);
     }
     poly_diff(dp);
 #undef CS
 
     UINF_ALLOCA(r2pi, 2);
     reciprocol_twopi(r2pi);
-    printf("r2pi = %llu\n", uinf_read64(r2pi));
+    printf("r2pi = %lu\n", uinf_read64_high(r2pi));
 
     UINF_ALLOCA(root, 2);
-    uinf_assign64(root, 1llu << 61);
+    uinf_assign64_high(root, 1lu << 61);
     critical_point_find(root, 32*root.size, dp, arccos, r2pi, 32*r2pi.size);
-    float root_f = uinf_read64(root);
+    float root_f = uinf_read64_high(root);
     root_f /= SQRTMAX64;
     root_f /= SQRTMAX64;
-    printf("root = %llu, i.e. %f\n", uinf_read64(root), root_f);
+    printf("root = %lu, i.e. %f\n", uinf_read64_high(root), root_f);
 }
 
 void poly_test() {
@@ -661,140 +678,37 @@ void poly_test() {
     const u64 cs[CS] = {200, 2000000, 5000000000000};
     POLY_ALLOCA(p, 3, 0, 2);
     for (u64 i = 0; i < CS; i++) {
-        uinf_assign64(poly_index(p, i), cs[i]);
+        uinf_assign64_low(poly_index(p, i), cs[i]);
     }
 #undef CS
     const u64 x_u = 5;
     UINF_ALLOCA(x, 2);
-    uinf_assign64(x, x_u);
+    uinf_assign64_low(x, x_u);
     UINF_ALLOCA(y, 2);
     {
         uinf_zero(y);
-        poly_eval(y, p, x, 0);
-        u64 actual = uinf_read64(y);
+        poly_eval(y, p, x, 0, 0);
+        u64 actual = uinf_read64_low(y);
         u64 expected = cs[2]*x_u*x_u + cs[1]*x_u + cs[0];
         if (actual != expected) {
-            printf("p(5) = %llu != %llu\n", actual, expected);
+            printf("p(5) = %lu != %lu\n", actual, expected);
         }
     }
     {
         const u64 rshift = 10;
         uinf_lshift(x, rshift);
         uinf_zero(y);
-        poly_eval(y, p, x, rshift);
-        u64 actual = uinf_read64(y);
+        poly_eval(y, p, x, rshift, rshift);
+        u64 actual = uinf_read64_low(y);
         u64 expected = cs[2]*x_u*x_u + cs[1]*x_u + cs[0];
-        if (actual != expected) {
-            printf("p(5) = %llu != %llu\n", actual, expected);
+        if (actual != expected << rshift) {
+            printf("p(5) = %lu != %lu\n", actual, expected << rshift);
         }
     }
 }
 
-void references_test() {
-#define YS 8
-    struct test {
-        float y;
-        u64 arctan;
-        u64 arcsin;
-        u64 arccos;
-        u64 log;
-    };
-    const struct test tests[YS] = {
-        {0.49F, 1337637691987343317, 1503439474586368913, 3108246543841018990, 537654661102540701},
-        {0.5F, 1361218612134873190, 1537228672809129301, 3074457345618258602, 0},
-        {0.51F, 1384611644667422749, 1571243910720920770, 3040442107706467133, 17919736732383054105U},
-        {0.5625F, 1504319350508084718, 1753919825228814155, 2857766193198573748, 15312181060378489024U},
-        {0.0078125F, 22936177926750894, 22936877886913355, 4588749140540474548, 0},
-        {0.2F, 579531757966409893, 591164816339000973, 4020521202088386930, 5938524779959067349},
-        {0.4F, 1117125074088010363, 1208168419403369306, 3403517599024018597, 5938524779959067349},
-        {0.75F, 1889248794157641523, 2489817403875320550, 2121868614552067353, 7656090530189244512},
-    };
-    for (int j = 0; j < YS; j++) {
-        float y = tests[j].y;
-        y *= SQRTMAX64;
-        y *= SQRTMAX64;
-        u64 y_u = y;
-        {
-            UINF_ALLOCA(x, 2);
-            uinf_zero(x);
-            UINF_ALLOCA(y, 2);
-            uinf_assign64(y, y_u);
-            arctan(x, y);
-            u64 arclen_u = uinf_read64(x);
-            if (arclen_u != tests[j].arctan) {
-                float arclen = arclen_u;
-                arclen /= SQRTMAX64;
-                arclen /= SQRTMAX64;
-                printf("Incorrect value:\n");
-                printf("arctan(%llu) = %llu\n", y_u, arclen_u);
-                printf("i.e. arctan(%.8f) = %f\n", tests[j].y, arclen);
-                printf("\n");
-            }
-        }
-        {
-            UINF_ALLOCA(x, 2);
-            uinf_zero(x);
-            UINF_ALLOCA(y, 2);
-            uinf_assign64(y, y_u);
-            arcsin(x, y);
-            u64 arclen_u = uinf_read64(x);
-            if (arclen_u != tests[j].arcsin) {
-                float arclen = arclen_u;
-                arclen /= SQRTMAX64;
-                arclen /= SQRTMAX64;
-                printf("Incorrect value:\n");
-                printf("arcsin(%llu) = %llu\n", y_u, arclen_u);
-                printf("i.e. arcsin(%.8f) = %f\n", tests[j].y, arclen);
-                printf("\n");
-            }
-        }
-        {
-            UINF_ALLOCA(x, 2);
-            uinf_zero(x);
-            UINF_ALLOCA(y, 2);
-            uinf_assign64(y, y_u);
-            arccos(x, y);
-            u64 arclen_u = uinf_read64(x);
-            if (arclen_u != tests[j].arccos) {
-                float arclen = arclen_u;
-                arclen /= SQRTMAX64;
-                arclen /= SQRTMAX64;
-                printf("Incorrect value:\n");
-                printf("arccos(%llu) = %llu\n", y_u, arclen_u);
-                printf("i.e. arccos(%.8f) = %f\n", tests[j].y, arclen);
-                printf("\n");
-            }
-        }
-        {
-            UINF_ALLOCA(x, 2);
-            uinf_zero(x);
-            UINF_ALLOCA(y, 2);
-            uinf_assign64(y, y_u);
-            neglog2(x, y);
-            u64 neglog_u = uinf_read64(x);
-            if (neglog_u != tests[j].log) {
-                float neglog = neglog_u;
-                neglog /= SQRTMAX64;
-                neglog /= SQRTMAX64;
-                printf("Incorrect value:\n");
-                printf("-log(%llu) = %llu\n", y_u, neglog_u);
-                printf("i.e. log(%.8f) = %f\n", tests[j].y, -neglog);
-                printf("\n");
-            }
-        }
-    }
-}
-
-void test_pi() {
-    UINF_ALLOCA(data, 2);
-    reciprocol_twopi(data);
-    u64 data_u = uinf_read64(data);
-    float data_f = data_u;
-    data_f /= SQRTMAX64;
-    data_f /= SQRTMAX64;
-    printf("1/2pi = %llu\n", data_u);
-    printf("i.e. pi = %.8f\n", 0.5F / data_f);
-}
+///////////
+// Render
 
 u32 arctan32(u32 x) {
     u32 y = 0;
@@ -870,7 +784,7 @@ void render(char *name, u32 (*f)(u32), u32 (*g)(u32), u64 yscale, u64 xscale) {
         u64 y = (IMAGE_HEIGHT - 1 - j) * (yscale-2) / (IMAGE_WIDTH-1) + 1;
         xs[j] = g(y);
     }
-    bool increasing = ys[3*IMAGE_WIDTH/4] > ys[IMAGE_WIDTH/4];
+    bool increasing = xs[3*IMAGE_WIDTH/4] < xs[IMAGE_WIDTH/4];
     FILE *out = fopen(name, "wb");
     const u64 bright = 255;
     fprintf(out, "P6 %lu %lu %lu ", IMAGE_WIDTH, IMAGE_HEIGHT, bright);
@@ -878,22 +792,22 @@ void render(char *name, u32 (*f)(u32), u32 (*g)(u32), u64 yscale, u64 xscale) {
         u64 x0 = xs[j] * (IMAGE_WIDTH - 1) / xscale;
         for (size_t i = 0; i < IMAGE_WIDTH; i++) {
             u64 y0 = ys[i] * (IMAGE_HEIGHT - 1) / yscale;
-            int red = 0;
+            int cyan = 0;
             if ((IMAGE_HEIGHT-1 - j) < y0) {
-                red = bright;
+                cyan = bright;
             } else if ((IMAGE_HEIGHT-1 - j) == y0) {
                 u64 rem = ys[i] * (IMAGE_HEIGHT - 1) % yscale;
-                red = rem * bright / yscale;
+                cyan = rem * bright / yscale;
             }
-            int cyan = 0;
+            int red = 0;
             if (i < x0) {
-                cyan = bright;
+                red = bright;
             } else if (i == x0) {
                 u64 rem = xs[j] * (IMAGE_WIDTH - 1) % xscale;
-                cyan = rem * bright / xscale;
+                red = rem * bright / xscale;
             }
             if (increasing) {
-                cyan = bright - cyan;
+                red = bright - red;
             }
             fputc(red, out);
             fputc(cyan, out);
@@ -903,15 +817,39 @@ void render(char *name, u32 (*f)(u32), u32 (*g)(u32), u64 yscale, u64 xscale) {
     fclose(out);
 }
 
+#define MODEL_SIZE 2
+#define MODEL_TERMS 3
+#define MODEL_EXP 32
+
+POLY_ALLOCA(model, MODEL_TERMS, MODEL_EXP, MODEL_SIZE);
+
+void model_initialize(u64 a, u64 b, u64 c) {
+    uinf_assign64_low(poly_index(model, 0), c);
+    uinf_assign64_low(poly_index(model, 1), b);
+    uinf_assign64_low(poly_index(model, 2), a);
+}
+
+u32 model_eval(u32 x) {
+    UINF_ALLOCA(y, 2);
+    poly_eval(y, model, (uinf){1,&x}, MODEL_EXP, MODEL_EXP);
+    printf("p(%u) = %lu\n", x, uinf_read64_low(y));
+    return y.data[0];
+}
+
 int main() {
     //references_test();
     //test_pi();
-    //poly_test();
+    poly_test();
     //critical_point_find_test();
-    render("tan.ppg", tan32, arctan32, SQRTMAX64, SQRTMAX64/8);
-    render("powb.ppg", powb32, log32, SQRTMAX64, SQRTMAX64);
-    render("spread.ppg", spread32, arcspread32, SQRTMAX64, SQRTMAX64/4);
-    render("sin.ppg", sin32, arcsin32, SQRTMAX64, SQRTMAX64/4);
-    render("cos.ppg", cos32, arccos32, SQRTMAX64, SQRTMAX64/4);
+    model_initialize(1UL<<37, 1UL<<34UL, 0);
+    render("tan.ppg", model_eval, arctan32, SQRTMAX64, SQRTMAX64/8);
+    model_initialize(1UL<<31, 1UL<<31UL, 0);
+    render("powb.ppg", model_eval, log32, SQRTMAX64, SQRTMAX64);
+    model_initialize(0, 1UL<<34UL, 0);
+    render("spread.ppg", model_eval, arcspread32, SQRTMAX64, SQRTMAX64/4);
+    model_initialize(~0UL<<36UL,1UL<<35UL,~0UL<<32UL);
+    render("sin.ppg", model_eval, arcsin32, SQRTMAX64, SQRTMAX64/4);
+    model_initialize(~0UL<<36UL,0,0);
+    render("cos.ppg", model_eval, arccos32, SQRTMAX64, SQRTMAX64/4);
 }
 
