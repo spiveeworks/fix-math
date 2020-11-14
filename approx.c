@@ -248,6 +248,31 @@ void uinf_lshift(uinf x, u64 shift) {
 
 }
 
+// could make a finf type?
+void uinf_mul_rshift_signed(uinf out, uinf x, u64 x_exp) {
+    bool outsign = false;
+    bool xsign = false;
+    if (out.data[out.size-1] & HALFMAX32) {
+        outsign = true;
+        uinf_negate(out);
+    }
+    if (x.data[x.size-1] & HALFMAX32) {
+        xsign = true;
+        uinf_negate(x);
+    }
+    UINF_ALLOCA(temp, out.size + x.size);
+    uinf_zero(temp);
+    uinf_mul(temp, out, x);
+    uinf_rshift(temp, x_exp);
+    uinf_write_low(out, temp);
+    if (xsign) {
+        uinf_negate(x);
+    }
+    if (outsign != xsign) {
+        uinf_negate(out);
+    }
+}
+
 //////////////////////////////
 // cartesian rotation counter
 
@@ -545,32 +570,18 @@ void poly_diff(poly p) {
 
 void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
     uinf_zero(out);
-    UINF_ALLOCA(swap, p.size + x.size);
-    printf("\nout = 0\n");
     for (long i = 0; i < p.terms; i++) {
         // out *= x
-        uinf_zero(swap);
-        uinf_mul(swap, out, x);
-        uinf_rshift_signed(swap, x_exp);
-        printf("out = %ld*%ld>>%ld = %ld\n",
-                uinf_read64_low(out),
-                uinf_read64_low(x),
-                x_exp, uinf_read64_low(swap)
-        );
-        uinf_zero(out);
-        uinf_write_low(out, swap);
+        uinf_mul_rshift_signed(out, x, x_exp);
 
         // out += c
+        UINF_ALLOCA(swap, p.size + out.size);
         uinf_zero(swap);
         uinf c = poly_index(p, p.terms - i - 1);
         uinf_write_signed(swap, c);
         uinf_lshift(swap, out_exp);
         uinf_rshift_signed(swap, p.exp);
         uinf_add(out, out, swap);
-        printf("+%ld = %ld\n",
-                uinf_read64_low(swap),
-                uinf_read64_low(out)
-        );
     }
 }
 
@@ -829,10 +840,11 @@ void model_initialize(u64 a, u64 b, u64 c) {
     uinf_assign64_low(poly_index(model, 2), a);
 }
 
-u32 model_eval(u32 x) {
+u32 model_eval(u32 x32) {
+    UINF_ALLOCA(x, 2);
+    uinf_assign64_low(x, x32);
     UINF_ALLOCA(y, 2);
-    poly_eval(y, model, (uinf){1,&x}, MODEL_EXP, MODEL_EXP);
-    printf("p(%u) = %lu\n", x, uinf_read64_low(y));
+    poly_eval(y, model, x, MODEL_EXP, MODEL_EXP);
     return y.data[0];
 }
 
@@ -843,13 +855,13 @@ int main() {
     //critical_point_find_test();
     model_initialize(1UL<<37, 1UL<<34UL, 0);
     render("tan.ppg", model_eval, arctan32, SQRTMAX64, SQRTMAX64/8);
-    model_initialize(1UL<<31, 1UL<<31UL, 0);
+    model_initialize(1UL<<31UL, 1UL<<31UL, 0);
     render("powb.ppg", model_eval, log32, SQRTMAX64, SQRTMAX64);
     model_initialize(0, 1UL<<34UL, 0);
     render("spread.ppg", model_eval, arcspread32, SQRTMAX64, SQRTMAX64/4);
     model_initialize(~0UL<<36UL,1UL<<35UL,~0UL<<32UL);
     render("sin.ppg", model_eval, arcsin32, SQRTMAX64, SQRTMAX64/4);
-    model_initialize(~0UL<<36UL,0,0);
+    model_initialize((~0UL<<36UL),0,(1UL<<32UL)-1);
     render("cos.ppg", model_eval, arccos32, SQRTMAX64, SQRTMAX64/4);
 }
 
