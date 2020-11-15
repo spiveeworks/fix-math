@@ -510,13 +510,14 @@ u32 bisect32(u32 (*f)(u32), u32 y, bool increasing) {
 }
 */
 
-// finds x so that f(x) = y
-void bisect(void (*f)(uinf, uinf), uinf x, uinf y, bool increasing) {
+// finds the bottom n bits of x so that f(x) = y.
+// Assumes that these bits are initially 0.
+void bisect(void (*f)(uinf, uinf), uinf x, uinf y, bool increasing, u64 n) {
     UINF_ALLOCA(yc, y.size)
     UINF_ALLOCA(newx, x.size)
-    uinf_zero(x);
     for (long i = x.size-1; i >= 0; i--) {
         for (int j = 31; j >= 0; j--) {
+            if (i * 32 + j >= n) { continue; }
             uinf_write_low(newx, x);
             newx.data[i] |= 1U << (u32)j;
             uinf_zero(yc);
@@ -572,14 +573,7 @@ void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
     uinf_zero(out);
     for (long i = 0; i < p.terms; i++) {
         // out *= x
-        printf("%lu * %lu = ",
-                uinf_read64_low(out),
-                uinf_read64_low(x)
-              );
         uinf_mul_rshift_signed(out, x, x_exp);
-        printf("%lu\n",
-                uinf_read64_low(out)
-              );
 
         // out += c
         UINF_ALLOCA(swap, p.size + out.size);
@@ -589,50 +583,41 @@ void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
         uinf_lshift(swap, out_exp);
         uinf_rshift_signed(swap, p.exp);
         uinf_add(out, out, swap);
-        printf(" + %lu = %lu\n",
-                uinf_read64_low(swap),
-                uinf_read64_low(out)
-              );
     }
 }
+
+//////////////////////////
+// Critical Point Finder
 
 // solve (p-f)'(x) = 0 by solving g(cp(x)) - x = 0
 // where g is an inverse function satisfying f'(g(cx)) = x
+//
 // e.g. f = sin, giving f' = 2pi*cos, since we don't use radians
 // then 2pi*cos(g(cx)) = x => g(cx) = arccos(x/2pi),
 // so set g = arccos, c = 1/2pi
-void critical_point_find(
-    uinf out, u64 out_exp,
-    poly p,
-    void (*g)(uinf, uinf),
-    uinf c, u64 cp_exp
-) {
-    bool converged = false;
-    while (!converged) {
-        UINF_ALLOCA(prev, out.size);
-        uinf_write_low(prev, out);
 
-        UINF_ALLOCA(px, out.size*2);
-        uinf_zero(px);
-        poly_eval(px, p, out, out_exp, out_exp);
+void (*critical_point_g)(uinf, uinf);
+uinf critical_point_c;
+u64 critical_point_c_exp;
+poly critical_point_dp;
+u64 critical_point_x_exp;
+u64 critical_point_dpx_exp;
 
-        uinf_mul_rshift_signed(px, c, cp_exp);
+// implements g(cp(x)) - x
+// make sure that g mapes dpx_exp back to x_exp
+void critical_point_function(uinf out, uinf x) {
+    UINF_ALLOCA(px, out.size*2);
+    uinf_zero(px);
+    poly_eval(px, critical_point_dp, x, critical_point_x_exp, critical_point_dpx_exp);
 
-        px.size = out.size;
-        g(out, px);
+    uinf_mul_rshift_signed(px, critical_point_c, critical_point_c_exp);
 
-        converged = true;
-        for (u64 i = 0; i < out.size; i++) {
-            if (out.data[i] != prev.data[i]) {
-                //converged = false;
-            }
-        }
-        printf("%lu\n", uinf_read64_low(out));
-    }
+    uinf_zero(out);
+    px.size = out.size;
+    critical_point_g(out, px);
+
+    uinf_sub(out, out, x);
 }
-
-//////////////////////////////
-// tests/entry point
 
 void reciprocol_twopi(uinf out) {
     UINF_ALLOCA(x, out.size * 2);
@@ -646,166 +631,42 @@ void reciprocol_twopi(uinf out) {
     }
 }
 
-void critical_point_find_test() {
-    const u64 p_exp = 16;
-#define CS 4
-    // 1- (4x-1)^2
-    // -16x^2 +8x
-    struct coeff {
-        u64 n;
-        u64 d;
-        bool neg;
-    } const cs[CS] = {
-        {0, 1, false},
-        {8, 1, false},
-        {24, 1, true},
-        {32, 1, false},
-    };
-    POLY_ALLOCA(p, CS, p_exp, 2);
-    POLY_ALLOCA(dp, CS, p_exp, 2);
-    for (u64 i = 0; i < CS; i++) {
-        u64 c = cs[i].n;
-        c <<= p_exp;
-        c /= cs[i].d;
-        if (cs[i].neg) {
-            c = (~c)+1;
-        }
-        uinf_assign64_high(poly_index(p, i), c);
-        uinf_assign64_high(poly_index(dp, i), c);
-    }
-    poly_diff(dp);
-#undef CS
-
-    UINF_ALLOCA(r2pi, 2);
-    reciprocol_twopi(r2pi);
-    printf("r2pi = %lu\n", uinf_read64_high(r2pi));
-
-    UINF_ALLOCA(root, 2);
-    uinf_assign64_high(root, 1lu << 61);
-    critical_point_find(root, 32*root.size, dp, arccos, r2pi, 32*r2pi.size);
-    float root_f = uinf_read64_high(root);
-    root_f /= SQRTMAX64;
-    root_f /= SQRTMAX64;
-    printf("root = %lu, i.e. %f\n", uinf_read64_high(root), root_f);
-}
-
-void poly_test() {
-#define CS 3
-    const u64 cs[CS] = {200, 2000000, 5000000000000};
-    POLY_ALLOCA(p, 3, 0, 2);
-    for (u64 i = 0; i < CS; i++) {
-        uinf_assign64_low(poly_index(p, i), cs[i]);
-    }
-#undef CS
-    const u64 x_u = 5;
-    UINF_ALLOCA(x, 2);
-    uinf_assign64_low(x, x_u);
-    UINF_ALLOCA(y, 2);
-    {
-        uinf_zero(y);
-        poly_eval(y, p, x, 0, 0);
-        u64 actual = uinf_read64_low(y);
-        u64 expected = cs[2]*x_u*x_u + cs[1]*x_u + cs[0];
-        if (actual != expected) {
-            printf("p(5) = %lu != %lu\n", actual, expected);
-        }
-    }
-    {
-        const u64 rshift = 10;
-        uinf_lshift(x, rshift);
-        uinf_zero(y);
-        poly_eval(y, p, x, rshift, rshift);
-        u64 actual = uinf_read64_low(y);
-        u64 expected = cs[2]*x_u*x_u + cs[1]*x_u + cs[0];
-        if (actual != expected << rshift) {
-            printf("p(5) = %lu != %lu\n", actual, expected << rshift);
-        }
-    }
-}
 
 ///////////
 // Render
-
-u32 arctan32(u32 x) {
-    u32 y = 0;
-    arctan((uinf){1,&y},(uinf){1,&x});
-    return y;
-}
-
-u32 log32(u32 x) {
-    u32 y = 0;
-    log2((uinf){1,&y},(uinf){1,&x});
-    return y;
-}
-
-u32 arcspread32(u32 x) {
-    u32 y = 0;
-    arcspread((uinf){1,&y},(uinf){1,&x});
-    return y;
-}
-
-u32 arcsin32(u32 x) {
-    u32 y = 0;
-    arcsin((uinf){1,&y},(uinf){1,&x});
-    return y;
-}
-
-u32 arccos32(u32 x) {
-    u32 y = 0;
-    arccos((uinf){1,&y},(uinf){1,&x});
-    return y;
-}
-
-u32 tan32(u32 x) {
-    u32 y = 0;
-    bisect(arctan, (uinf){1,&y}, (uinf){1,&x}, true);
-    return y;
-}
-
-u32 powb32(u32 x) {
-    u32 y = 0;
-    bisect(log2, (uinf){1,&y}, (uinf){1,&x}, true);
-    return y;
-}
-
-u32 spread32(u32 x) {
-    u32 y = 0;
-    bisect(arcspread, (uinf){1,&y}, (uinf){1,&x}, true);
-    return y;
-}
-
-u32 sin32(u32 x) {
-    u32 y = 0;
-    bisect(arcsin, (uinf){1,&y}, (uinf){1,&x}, true);
-    return y;
-}
-
-u32 cos32(u32 x) {
-    u32 y = 0;
-    bisect(arccos, (uinf){1,&y}, (uinf){1,&x}, false);
-    return y;
-}
 
 #define IMAGE_WIDTH 512UL
 #define IMAGE_HEIGHT 512UL
 
 void render(char *name,
-    u32 (*f)(u32), u32 (*g)(u32), u32 (*df)(u32),
-    u64 yscale, u64 xscale, long dyscale
+    void (*finv)(uinf,uinf), poly p,
+    u64 yscale, u64 xscale
 ) {
+    static u64 xs[IMAGE_HEIGHT];
+    for (size_t j = 0; j < IMAGE_HEIGHT; j++) {
+        u32 y = (IMAGE_HEIGHT - 1 - j) * (yscale-2) / (IMAGE_HEIGHT-1) + 1;
+        u32 x = 0;
+        finv((uinf){1, &x}, (uinf){1, &y});
+        xs[j] = x;
+    }
+    bool increasing = xs[3*IMAGE_WIDTH/4] < xs[IMAGE_WIDTH/4];
+
     static u64 ys[IMAGE_WIDTH];
     static long dys[IMAGE_WIDTH];
     for (size_t i = 0; i < IMAGE_WIDTH; i++) {
-        u64 x = i * (xscale-2) / (IMAGE_WIDTH-1) + 1;
-        ys[i] = f(x);
-        dys[i] = (long)(int)df(x);
+        u32 x32 = i * (xscale-2) / (IMAGE_WIDTH-1) + 1;
+
+        UINF_ALLOCA(x, 2);
+        uinf_assign64_low(x, x32);
+        UINF_ALLOCA(y, 2);
+        poly_eval(y, p, x, 32, 32);
+        ys[i] = (long)uinf_read64_low(y);
+
+        u32 actual = 0;
+        bisect(finv, (uinf){1, &actual}, (uinf){1, &x32}, increasing, 32);
+        dys[i] = (long)ys[i] - (long)actual;
     }
-    static u64 xs[IMAGE_HEIGHT];
-    for (size_t j = 0; j < IMAGE_HEIGHT; j++) {
-        u64 y = (IMAGE_HEIGHT - 1 - j) * (yscale-2) / (IMAGE_WIDTH-1) + 1;
-        xs[j] = g(y);
-    }
-    bool increasing = xs[3*IMAGE_WIDTH/4] < xs[IMAGE_WIDTH/4];
+
     FILE *out = fopen(name, "wb");
     const u64 bright = 255;
     fprintf(out, "P6 %lu %lu %lu ", IMAGE_WIDTH, IMAGE_HEIGHT, bright);
@@ -831,7 +692,7 @@ void render(char *name,
                 red = bright - red;
             }
 
-            long dy0 = IMAGE_HEIGHT/2 + dys[i]*((long)IMAGE_HEIGHT - 1)/dyscale;
+            long dy0 = IMAGE_HEIGHT/2 + dys[i]*((long)IMAGE_HEIGHT - 1)/(long)yscale;
             int green = cyan;
             int blue = cyan;
             if ((IMAGE_HEIGHT-1 - j) == dy0) {
@@ -871,23 +732,7 @@ void model_initialize(u64 a, u64 b, u64 c) {
     reciprocol_twopi(r2pi);
 }
 
-u32 model_eval(u32 x32) {
-    UINF_ALLOCA(x, 2);
-    uinf_assign64_low(x, x32);
-    UINF_ALLOCA(y, 2);
-    poly_eval(y, model, x, MODEL_EXP, MODEL_EXP);
-    return y.data[0];
-}
-
 #define DMODEL_SCALE 4U
-
-u32 model_diff(u32 x32) {
-    UINF_ALLOCA(x, 2);
-    uinf_assign64_low(x, x32);
-    UINF_ALLOCA(y, 2);
-    poly_eval(y, dmodel, x, MODEL_EXP, MODEL_EXP-DMODEL_SCALE);
-    return y.data[0];
-}
 
 u32 cos32_err(u32 x32) {
     UINF_ALLOCA(x, 2);
@@ -895,51 +740,80 @@ u32 cos32_err(u32 x32) {
     UINF_ALLOCA(y, 2);
     poly_eval(y, model, x, MODEL_EXP, MODEL_EXP);
     u32 actual = 0;
-    bisect(arccos, (uinf){1,&actual}, (uinf){1,&x32}, false);
+    bisect(arccos, (uinf){1,&actual}, (uinf){1,&x32}, false, 32);
     return ((long)uinf_read64_low(y) - (long)actual);
 }
 
 u32 cos32_fixpoint(u32 x32) {
+    critical_point_x_exp = 64;
+    UINF_ALLOCA(x, 2);
+    x.data[0] = 0;
+    x.data[1] = x32;
+
+    critical_point_dp = dmodel;
+    critical_point_dpx_exp = 64;
+
     UINF_ALLOCA(r2pineg, 2);
     uinf_write_low(r2pineg, r2pi);
     uinf_negate(r2pineg);
+    critical_point_c = r2pineg;
+    critical_point_c_exp = 32 * r2pineg.size;
+
+    critical_point_g = arcsin;
+
+    UINF_ALLOCA(zero, 2);
+    uinf_zero(zero);
+
+    x.data[1] &= 0xF8000000;
+    bisect(critical_point_function, x, zero, true, 27);
+
+    return cos32_err(x.data[1]);
+}
+
+u32 cos32_critical_point_function(u32 x32) {
+    critical_point_x_exp = 64;
+    UINF_ALLOCA(x, 2);
+    x.data[0] = 0;
+    x.data[1] = x32;
+
+    critical_point_dp = dmodel;
+    critical_point_dpx_exp = 64;
+
+    UINF_ALLOCA(r2pineg, 2);
+    uinf_write_low(r2pineg, r2pi);
+    uinf_negate(r2pineg);
+    critical_point_c = r2pineg;
+    critical_point_c_exp = 32 * r2pineg.size;
+
+    critical_point_g = arcsin;
 
     UINF_ALLOCA(y, 2);
-    y.data[0] = 0;
-    y.data[1] = x32;
-    printf("\ny = %lu\n", uinf_read64_low(y));
+    uinf_zero(y);
 
-    critical_point_find(
-        y, 64,
-        dmodel,
-        arcsin,
-        r2pineg, 32*r2pineg.size
-    );
-    //return cos32_err(uinf_read64_low(y));
-    return uinf_read64_low(y) >> 32;
+    critical_point_function(y, x);
+    return y.data[1];
 }
 
 int main() {
-    //references_test();
-    //test_pi();
-    poly_test();
-    //critical_point_find_test();
     model_initialize(1UL<<37, 1UL<<34UL, 0);
-    render("tan.ppg", model_eval, arctan32, model_diff,
-            SQRTMAX64, SQRTMAX64/8, SQRTMAX64);
+    render("tan.ppg",
+            arctan, model,
+            SQRTMAX64, SQRTMAX64/8);
     model_initialize(1UL<<31UL, 1UL<<31UL, 0);
-    render("powb.ppg", model_eval, log32, model_diff,
-            SQRTMAX64, SQRTMAX64, SQRTMAX64);
+    render("powb.ppg",
+            log2, model,
+            SQRTMAX64, SQRTMAX64);
     model_initialize(0, 1UL<<34UL, 0);
-    render("spread.ppg", model_eval, arcspread32, model_diff,
-            SQRTMAX64, SQRTMAX64/4, SQRTMAX64);
-    model_initialize(~0UL<<36UL,1UL<<35UL,~0UL<<32UL);
-    render("sin.ppg", model_eval, arcsin32, model_diff,
-            SQRTMAX64, SQRTMAX64/4, SQRTMAX64);
+    render("spread.ppg",
+            arcspread, model,
+            SQRTMAX64, SQRTMAX64/4);
+    model_initialize(~0UL<<36UL,1UL<<35UL,0);
+    render("sin.ppg",
+            arcsin, model,
+            SQRTMAX64, SQRTMAX64/4);
     model_initialize((~0UL<<36UL),0,(1UL<<32UL)-1);
-    render("cos.ppg", model_eval, arccos32, cos32_err,
-            SQRTMAX64, SQRTMAX64/4, SQRTMAX64);
-    render("coscp.ppg", model_eval, arccos32, cos32_fixpoint,
-            SQRTMAX64, SQRTMAX64/4, SQRTMAX64);
+    render("cos.ppg",
+            arccos, model,
+            SQRTMAX64, SQRTMAX64/4);
 }
 
