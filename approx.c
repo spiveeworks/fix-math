@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 
 typedef unsigned u32;
 typedef long unsigned u64;
@@ -589,22 +590,22 @@ void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
 //////////////////////////
 // Critical Point Finder
 
-// solve (p-f)'(x) = 0 by solving g(cp(x)) - x = 0
-// where g is an inverse function satisfying f'(g(cx)) = x
-//
-// e.g. f = sin, giving f' = 2pi*cos, since we don't use radians
-// then 2pi*cos(g(cx)) = x => g(cx) = arccos(x/2pi),
-// so set g = arccos, c = 1/2pi
+// solve (p-f)'(x) = 0
+// <=> p'(x) = f'(x)
+// <=> g(p'(x)) = x
+// where g is the inverse of f'
+// usually we get a coefficient related to pi or e, so we separate g into a
+// function we have implemented already, and a coefficient we can calculate.
 
 void (*critical_point_g)(uinf, uinf);
-uinf critical_point_c;
+UINF_ALLOCA(critical_point_c, 2);
 u64 critical_point_c_exp;
 poly critical_point_dp;
 u64 critical_point_x_exp;
 u64 critical_point_dpx_exp;
 
-// implements g(cp(x)) - x
-// make sure that g mapes dpx_exp back to x_exp
+// implements F(x) = g(cp(x)) - x
+// make sure that g maps dpx_exp back to x_exp
 void critical_point_function(uinf out, uinf x) {
     UINF_ALLOCA(px, out.size*2);
     uinf_zero(px);
@@ -631,6 +632,56 @@ void reciprocol_twopi(uinf out) {
     }
 }
 
+// f(x) = 2^x, giving f'(x) = ln(2)*2^x
+// then ln(2)*2^(g(cx)) = x => g(cx) = log_2(x/ln(2))
+// so set g = log_2, c = 1/ln(2)
+void initialize_cp_powb() {
+    critical_point_x_exp = 64;
+    critical_point_dpx_exp = 64;
+    critical_point_g = arcsin;
+
+    reciprocol_twopi(critical_point_c);
+    uinf_negate(critical_point_c);
+    critical_point_c_exp = 64;
+}
+
+// f(x) = sin(2pi*x), giving f'(x) = 2pi*cos(2pi*x)
+// then 2pi*cos(2pi*g(cx)) = x => g(cx) = arccos(x/2pi)/2pi,
+// so set g = arccos, c = 1/2pi
+void initialize_cp_sin() {
+    critical_point_x_exp = 64;
+    critical_point_dpx_exp = 64;
+    critical_point_g = arccos;
+
+    reciprocol_twopi(critical_point_c);
+    critical_point_c_exp = 64;
+}
+
+// negative of the sine case
+void initialize_cp_cos() {
+    critical_point_x_exp = 64;
+    critical_point_dpx_exp = 64;
+    critical_point_g = arcsin;
+
+    reciprocol_twopi(critical_point_c);
+    uinf_negate(critical_point_c);
+    critical_point_c_exp = 64;
+}
+
+// harder than any of the above, in fact tan is only hanging around because it
+// was the first one I implemented
+// f(x) = tan(2pi*x), giving f'(x) = 2pi*cos(2pi*x)^-2
+// then 2pi*cos(2pi*g(cx))^-2 = x
+// => 2pi/x = cos(2pi*g(cx))^2
+// => 1 - 2pi/x = sin(2pi*(g(cx)))^2
+// => arcspread(1 - 2pi/x)/2pi = g(cx)
+// we haven't implemented division so we still wouldn't be able to solve this,
+// even if we did change the format of the critical point finder.
+void initialize_cp_tan() {
+    printf("Solving tan not supported\n");
+    exit(1);
+}
+
 
 ///////////
 // Render
@@ -644,7 +695,7 @@ void render(char *name,
 ) {
     static u64 xs[IMAGE_HEIGHT];
     for (size_t j = 0; j < IMAGE_HEIGHT; j++) {
-        u32 y = (IMAGE_HEIGHT - 1 - j) * (yscale-2) / (IMAGE_HEIGHT-1) + 1;
+        u32 y = (IMAGE_HEIGHT - 1 - j) * yscale / (IMAGE_HEIGHT-1) + 1;
         u32 x = 0;
         finv((uinf){1, &x}, (uinf){1, &y});
         xs[j] = x;
@@ -654,7 +705,7 @@ void render(char *name,
     static u64 ys[IMAGE_WIDTH];
     static long dys[IMAGE_WIDTH];
     for (size_t i = 0; i < IMAGE_WIDTH; i++) {
-        u32 x32 = i * (xscale-2) / (IMAGE_WIDTH-1) + 1;
+        u32 x32 = i * xscale / (IMAGE_WIDTH-1) + 1;
 
         UINF_ALLOCA(x, 2);
         uinf_assign64_low(x, x32);
@@ -665,6 +716,23 @@ void render(char *name,
         u32 actual = 0;
         bisect(finv, (uinf){1, &actual}, (uinf){1, &x32}, increasing, 32);
         dys[i] = (long)ys[i] - (long)actual;
+    }
+
+    const u64 search_bits = 28;
+    u64 search_count = 0;
+    u64 max_search_count = 1UL << (32 - search_bits);
+    u64 extrema[max_search_count];
+    for (size_t i = 0; (i << search_bits) <= xscale; i++) {
+        search_count += 1;
+
+        UINF_ALLOCA(x, 2);
+        uinf_assign64_low(x, i << search_bits);
+        UINF_ALLOCA(zero, 2);
+        uinf_zero(zero);
+
+        bisect(critical_point_function, x, zero, false, search_bits);
+
+        extrema[i] = uinf_read64_low(x) * (IMAGE_WIDTH - 1) / xscale;
     }
 
     FILE *out = fopen(name, "wb");
@@ -695,12 +763,19 @@ void render(char *name,
             long dy0 = IMAGE_HEIGHT/2 + dys[i]*((long)IMAGE_HEIGHT - 1)/(long)yscale;
             int green = cyan;
             int blue = cyan;
+            bool incident = false;
             if ((IMAGE_HEIGHT-1 - j) == dy0) {
-                if (cyan == 0) {
-                    green = 255;
-                } else {
-                    green = 0;
+                incident = true;
+            }
+
+            for (size_t s = 0; s < search_count; s++) {
+                if (i == extrema[s]) {
+                    incident = true;
                 }
+            }
+
+            if (incident) {
+                green = 255 - cyan;
             }
             fputc(red, out);
             fputc(green, out);
@@ -744,32 +819,6 @@ u32 cos32_err(u32 x32) {
     return ((long)uinf_read64_low(y) - (long)actual);
 }
 
-u32 cos32_fixpoint(u32 x32) {
-    critical_point_x_exp = 64;
-    UINF_ALLOCA(x, 2);
-    x.data[0] = 0;
-    x.data[1] = x32;
-
-    critical_point_dp = dmodel;
-    critical_point_dpx_exp = 64;
-
-    UINF_ALLOCA(r2pineg, 2);
-    uinf_write_low(r2pineg, r2pi);
-    uinf_negate(r2pineg);
-    critical_point_c = r2pineg;
-    critical_point_c_exp = 32 * r2pineg.size;
-
-    critical_point_g = arcsin;
-
-    UINF_ALLOCA(zero, 2);
-    uinf_zero(zero);
-
-    x.data[1] &= 0xF8000000;
-    bisect(critical_point_function, x, zero, true, 27);
-
-    return cos32_err(x.data[1]);
-}
-
 u32 cos32_critical_point_function(u32 x32) {
     critical_point_x_exp = 64;
     UINF_ALLOCA(x, 2);
@@ -795,23 +844,21 @@ u32 cos32_critical_point_function(u32 x32) {
 }
 
 int main() {
-    model_initialize(1UL<<37, 1UL<<34UL, 0);
-    render("tan.ppg",
-            arctan, model,
-            SQRTMAX64, SQRTMAX64/8);
+    critical_point_dp = dmodel;
+    critical_point_dpx_exp = 64;
+
     model_initialize(1UL<<31UL, 1UL<<31UL, 0);
+    initialize_cp_powb();
     render("powb.ppg",
             log2, model,
-            SQRTMAX64, SQRTMAX64);
-    model_initialize(0, 1UL<<34UL, 0);
-    render("spread.ppg",
-            arcspread, model,
-            SQRTMAX64, SQRTMAX64/4);
+            SQRTMAX64, SQRTMAX64-2);
     model_initialize(~0UL<<36UL,1UL<<35UL,0);
+    initialize_cp_sin();
     render("sin.ppg",
             arcsin, model,
             SQRTMAX64, SQRTMAX64/4);
     model_initialize((~0UL<<36UL),0,(1UL<<32UL)-1);
+    initialize_cp_cos();
     render("cos.ppg",
             arccos, model,
             SQRTMAX64, SQRTMAX64/4);
