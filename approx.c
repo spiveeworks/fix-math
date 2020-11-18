@@ -186,6 +186,17 @@ signed uinf_cmp(uinf x, uinf y) {
     return 0;
 }
 
+signed uinf_cmp_signed(uinf x, uinf y) {
+    bool x_positive = !(x.data[x.size - 1] & HALFMAX32);
+    bool y_positive = !(y.data[y.size - 1] & HALFMAX32);
+    if (x_positive == y_positive) {
+        // same sign, compare as unsigned integers
+        return uinf_cmp(x, y);
+    }
+    // different sign, whichever is positive is larger
+    return x_positive ? +1 : -1;
+}
+
 void uinf_rshift(uinf x, u64 shift) {
     u64 shift_hi = shift / 32;
     shift %= 32;
@@ -458,9 +469,15 @@ void neglog2(uinf x, uinf y) {
     const u64 n = y.size * 32;
     UINF_ALLOCA(out, y.size * 2);
     for (u64 i = 0; i < n; i++) {
+        bool lows_all_zero = true;
+        for (u64 j = 0; (long)j <= (long)y.size-2; j++) {
+            if (y.data[j] != 0) {
+                lows_all_zero = false;
+            }
+        }
         // this short circuit condition mainly exists so that the result is the
         // floor instead of ceil(x-1)
-        if (y.data[0] == 0 && y.data[1] == HALFMAX32) {
+        if (lows_all_zero && y.data[y.size-1] == HALFMAX32) {
             uinf_inc(x);
             // double y to get 1, which is a fixpoint y = y^2
             // so just finish doubling x and return
@@ -486,10 +503,17 @@ void neglog2(uinf x, uinf y) {
 void log2(uinf x, uinf y) {
     uinf_rshift(y, 1);
     y.data[y.size-1] |= 1U << 31U;
-    // 0.5+y/2 is now in the range [0.5, 1), so -log(0.5+y/5) in [-1, 0)
-    // so mod 1 we get x = -log(0.5+y/2)+1 = -log(1+y)
+    printf("0.5 + y/2 = %lx\n", uinf_read64_high(y));
+    // 0.5+y/2 is now in the range [0.5, 1),
+    // => log(0.5+y/5) in [-1, 0)
+    // => -log(0.5+y/5) in (0, 1]
+    // so we have x = -log(0.5+y/2), unless y = 0 where x overflows to 0
     neglog2(x, y);
-    // negate x and return
+    // negating a fixed point number with no whole part is the same as
+    // calculating 1 - x = 1 + log(0.5+y/2) = log(1 + y)
+    // if y = 0 then 1 - x overflows again, giving 0 = log(1 + 0)
+    // (this derivation is much less magical when you look at the self similar
+    // graph of log_2(x))
     uinf_negate(x);
 }
 
@@ -513,7 +537,10 @@ u32 bisect32(u32 (*f)(u32), u32 y, bool increasing) {
 
 // finds the bottom n bits of x so that f(x) = y.
 // Assumes that these bits are initially 0.
-void bisect(void (*f)(uinf, uinf), uinf x, uinf y, bool increasing, u64 n) {
+void bisect(
+    void (*f)(uinf, uinf), uinf x, uinf y,
+    bool increasing, u64 n, bool is_signed
+) {
     UINF_ALLOCA(yc, y.size)
     UINF_ALLOCA(newx, x.size)
     for (long i = x.size-1; i >= 0; i--) {
@@ -523,7 +550,7 @@ void bisect(void (*f)(uinf, uinf), uinf x, uinf y, bool increasing, u64 n) {
             newx.data[i] |= 1U << (u32)j;
             uinf_zero(yc);
             f(yc, newx);
-            signed cmp = uinf_cmp(yc, y);
+            signed cmp = is_signed ? uinf_cmp_signed(yc, y) : uinf_cmp(yc, y);
             if (cmp == 0) {
                 x.data[i] |= 1U << (u32)j;
                 return;
@@ -569,12 +596,27 @@ void poly_diff(poly p) {
     }
     uinf_zero(poly_index(p, p.terms - 1));
 }
+void (*critical_point_g)(uinf, uinf);
+poly critical_point_dp;
+poly model;
 
 void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
+    bool debug =
+        // p.data == critical_point_dp.data &&
+        p.data == model.data &&
+        critical_point_g == log2;
+
     uinf_zero(out);
+    if (debug) printf("\n");
     for (long i = 0; i < p.terms; i++) {
         // out *= x
+        if (debug) {
+            printf("%lx * %lx = ", uinf_read64_low(out), uinf_read64_low(x));
+        }
         uinf_mul_rshift_signed(out, x, x_exp);
+        if (debug) {
+            printf("%lx\n", uinf_read64_low(out));
+        }
 
         // out += c
         UINF_ALLOCA(swap, p.size + out.size);
@@ -584,6 +626,9 @@ void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
         uinf_lshift(swap, out_exp);
         uinf_rshift_signed(swap, p.exp);
         uinf_add(out, out, swap);
+        if (debug) {
+            printf("+ %lx = %lx\n", uinf_read64_low(swap), uinf_read64_low(out));
+        }
     }
 }
 
@@ -593,6 +638,7 @@ void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
 // solve (p-f)'(x) = 0
 // <=> p'(x) = f'(x)
 // <=> g(p'(x)) = x
+// <=> g(p'(x)) - x = 0
 // where g is the inverse of f'
 // usually we get a coefficient related to pi or e, so we separate g into a
 // function we have implemented already, and a coefficient we can calculate.
@@ -607,19 +653,37 @@ u64 critical_point_dpx_exp;
 // implements F(x) = g(cp(x)) - x
 // make sure that g maps dpx_exp back to x_exp
 void critical_point_function(uinf out, uinf x) {
-    UINF_ALLOCA(px, out.size*2);
-    uinf_zero(px);
-    poly_eval(px, critical_point_dp, x, critical_point_x_exp, critical_point_dpx_exp);
+    // add bits to represent unsigned as signed
+    UINF_ALLOCA(x_signed, x.size + 1);
+    uinf_zero(x_signed);
+    uinf_write_low(x_signed, x);
 
+    // evaluate
+    UINF_ALLOCA(px, out.size + 1);
+    uinf_zero(px);
+    poly_eval(px, critical_point_dp, x_signed, critical_point_x_exp, critical_point_dpx_exp);
+
+    if (critical_point_g == log2) {
+        printf("dpx = %ld\n", uinf_read64_low(px));
+    }
     uinf_mul_rshift_signed(px, critical_point_c, critical_point_c_exp);
+    if (critical_point_g == log2) {
+        printf("cdpx = %ld\n", uinf_read64_low(px));
+    }
 
     uinf_zero(out);
     px.size = out.size;
     critical_point_g(out, px);
+        return;
 
     uinf_sub(out, out, x);
 }
 
+// near 0 we have x ~= sin(x) ~= tan(x)
+// in radians we have implemented arctan(x)/2pi
+// so set x to 2^-n and calculate
+// arctan(x)/2pi = x/2pi = 2^-n/2pi
+// and return the low bits of this
 void reciprocol_twopi(uinf out) {
     UINF_ALLOCA(x, out.size * 2);
     uinf_zero(x);
@@ -632,26 +696,47 @@ void reciprocol_twopi(uinf out) {
     }
 }
 
-// f(x) = 2^x, giving f'(x) = ln(2)*2^x
-// then ln(2)*2^(g(cx)) = x => g(cx) = log_2(x/ln(2))
-// so set g = log_2, c = 1/ln(2)
-void initialize_cp_powb() {
-    critical_point_x_exp = 64;
-    critical_point_dpx_exp = 64;
-    critical_point_g = arcsin;
-
-    reciprocol_twopi(critical_point_c);
-    uinf_negate(critical_point_c);
-    critical_point_c_exp = 64;
+// dlog_2(x)/dx = 1/ln(2) * dln(x)/dx = 1/ln(2) * 1/x
+// at x = 1 this is 1/ln(2)
+// now use dlog_2(x)/dx = (log_2(x+h)-log_2(x))/h
+// giving 1/ln(2) = log_2(1+h)/h
+// very similar to the 1/2pi formula!
+// set h to 2^-n and take the low bits as before
+//
+// note 1/ln(2) is greater than 1 so the the top word of out is just 1
+void reciprocol_ln2(uinf out) {
+    UINF_ALLOCA(x, out.size * 2 - 1);
+    uinf_zero(x);
+    UINF_ALLOCA(y, out.size * 2 - 1);
+    uinf_zero(y);
+    y.data[out.size-1] = 1;
+    printf("x = %lu = %f\n", uinf_read64_high(y), (float)uinf_read64_high(y)/(float)(1UL << 32UL));
+    log2(x, y);
+    printf("1/ln(2) = %lu = %f\n", uinf_read64_low(x), (float)uinf_read64_low(x)/(float)(1UL << 32UL));
+    for (size_t i = 0; i < out.size; i++) {
+        out.data[i] = x.data[i];
+    }
 }
 
-// f(x) = sin(2pi*x), giving f'(x) = 2pi*cos(2pi*x)
-// then 2pi*cos(2pi*g(cx)) = x => g(cx) = arccos(x/2pi)/2pi,
-// so set g = arccos, c = 1/2pi
+// p'(x) = ln(2)2^x
+// <=> log_2(p'(x)/2^x) - x = 0
+// so set g = log_2, c = 1/ln(2)
+void initialize_cp_powb() {
+    critical_point_x_exp = 32;
+    critical_point_dpx_exp = 32;
+    critical_point_g = log2;
+
+    reciprocol_ln2(critical_point_c);
+    critical_point_c_exp = 32;
+}
+
+// p'(x) = 2pi*cos(2pi*x)
+// <=> arccos(p'(x)/2pi)/2pi - x = 0
+// so set g(x) = arccos(x)/2pi, c = 1/2pi
 void initialize_cp_sin() {
-    critical_point_x_exp = 64;
-    critical_point_dpx_exp = 64;
-    critical_point_g = arccos;
+    critical_point_x_exp = 32;
+    critical_point_dpx_exp = 32;
+    critical_point_g = arccos; // if interpreted in radians, this is arcos/2pi
 
     reciprocol_twopi(critical_point_c);
     critical_point_c_exp = 64;
@@ -659,8 +744,8 @@ void initialize_cp_sin() {
 
 // negative of the sine case
 void initialize_cp_cos() {
-    critical_point_x_exp = 64;
-    critical_point_dpx_exp = 64;
+    critical_point_x_exp = 32;
+    critical_point_dpx_exp = 32;
     critical_point_g = arcsin;
 
     reciprocol_twopi(critical_point_c);
@@ -711,11 +796,14 @@ void render(char *name,
         uinf_assign64_low(x, x32);
         UINF_ALLOCA(y, 2);
         poly_eval(y, p, x, 32, 32);
-        ys[i] = (long)uinf_read64_low(y);
+        ys[i] = uinf_read64_low(y);
 
         u32 actual = 0;
-        bisect(finv, (uinf){1, &actual}, (uinf){1, &x32}, increasing, 32);
-        dys[i] = (long)ys[i] - (long)actual;
+        //bisect(finv, (uinf){1, &actual}, (uinf){1, &x32}, increasing, 32, false);
+        //dys[i] = (long)ys[i] - (long)actual;
+        critical_point_function((uinf){1, &actual}, (uinf){1, &x32});
+        if (finv == log2) printf("y = %x\n", actual);
+        dys[i] = (long)(int)actual;
     }
 
     const u64 search_bits = 28;
@@ -730,7 +818,7 @@ void render(char *name,
         UINF_ALLOCA(zero, 2);
         uinf_zero(zero);
 
-        bisect(critical_point_function, x, zero, false, search_bits);
+        bisect(critical_point_function, x, zero, false, search_bits, true);
 
         extrema[i] = uinf_read64_low(x) * (IMAGE_WIDTH - 1) / xscale;
     }
@@ -809,46 +897,13 @@ void model_initialize(u64 a, u64 b, u64 c) {
 
 #define DMODEL_SCALE 4U
 
-u32 cos32_err(u32 x32) {
-    UINF_ALLOCA(x, 2);
-    uinf_assign64_low(x, x32);
-    UINF_ALLOCA(y, 2);
-    poly_eval(y, model, x, MODEL_EXP, MODEL_EXP);
-    u32 actual = 0;
-    bisect(arccos, (uinf){1,&actual}, (uinf){1,&x32}, false, 32);
-    return ((long)uinf_read64_low(y) - (long)actual);
-}
-
-u32 cos32_critical_point_function(u32 x32) {
-    critical_point_x_exp = 64;
-    UINF_ALLOCA(x, 2);
-    x.data[0] = 0;
-    x.data[1] = x32;
-
-    critical_point_dp = dmodel;
-    critical_point_dpx_exp = 64;
-
-    UINF_ALLOCA(r2pineg, 2);
-    uinf_write_low(r2pineg, r2pi);
-    uinf_negate(r2pineg);
-    critical_point_c = r2pineg;
-    critical_point_c_exp = 32 * r2pineg.size;
-
-    critical_point_g = arcsin;
-
-    UINF_ALLOCA(y, 2);
-    uinf_zero(y);
-
-    critical_point_function(y, x);
-    return y.data[1];
-}
-
 int main() {
     critical_point_dp = dmodel;
     critical_point_dpx_exp = 64;
 
-    model_initialize(1UL<<31UL, 1UL<<31UL, 0);
+    //model_initialize(1UL<<31UL, 1UL<<31UL, 0);
     initialize_cp_powb();
+    /*
     render("powb.ppg",
             log2, model,
             SQRTMAX64, SQRTMAX64-2);
@@ -862,5 +917,6 @@ int main() {
     render("cos.ppg",
             arccos, model,
             SQRTMAX64, SQRTMAX64/4);
+            */
 }
 
