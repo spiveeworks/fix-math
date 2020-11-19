@@ -499,11 +499,16 @@ void neglog2(uinf x, uinf y) {
     }
 }
 
-// x = log_2(1 + y)
+// x = log_2(1 + y) mod 1
 void log2(uinf x, uinf y) {
+    neglog2(x, y);
+    uinf_negate(x);
+}
+
+// x = log_2(1 + y)
+void inclog2(uinf x, uinf y) {
     uinf_rshift(y, 1);
     y.data[y.size-1] |= 1U << 31U;
-    printf("0.5 + y/2 = %lx\n", uinf_read64_high(y));
     // 0.5+y/2 is now in the range [0.5, 1),
     // => log(0.5+y/5) in [-1, 0)
     // => -log(0.5+y/5) in (0, 1]
@@ -601,22 +606,10 @@ poly critical_point_dp;
 poly model;
 
 void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
-    bool debug =
-        // p.data == critical_point_dp.data &&
-        p.data == model.data &&
-        critical_point_g == log2;
-
     uinf_zero(out);
-    if (debug) printf("\n");
     for (long i = 0; i < p.terms; i++) {
         // out *= x
-        if (debug) {
-            printf("%lx * %lx = ", uinf_read64_low(out), uinf_read64_low(x));
-        }
         uinf_mul_rshift_signed(out, x, x_exp);
-        if (debug) {
-            printf("%lx\n", uinf_read64_low(out));
-        }
 
         // out += c
         UINF_ALLOCA(swap, p.size + out.size);
@@ -626,9 +619,6 @@ void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
         uinf_lshift(swap, out_exp);
         uinf_rshift_signed(swap, p.exp);
         uinf_add(out, out, swap);
-        if (debug) {
-            printf("+ %lx = %lx\n", uinf_read64_low(swap), uinf_read64_low(out));
-        }
     }
 }
 
@@ -663,18 +653,14 @@ void critical_point_function(uinf out, uinf x) {
     uinf_zero(px);
     poly_eval(px, critical_point_dp, x_signed, critical_point_x_exp, critical_point_dpx_exp);
 
-    if (critical_point_g == log2) {
-        printf("dpx = %ld\n", uinf_read64_low(px));
-    }
     uinf_mul_rshift_signed(px, critical_point_c, critical_point_c_exp);
-    if (critical_point_g == log2) {
-        printf("cdpx = %ld\n", uinf_read64_low(px));
-    }
+        //uinf_rshift_signed(px, 0);
+        //uinf_write_low(out, px);
+        //return;
 
     uinf_zero(out);
     px.size = out.size;
     critical_point_g(out, px);
-        return;
 
     uinf_sub(out, out, x);
 }
@@ -710,24 +696,27 @@ void reciprocol_ln2(uinf out) {
     UINF_ALLOCA(y, out.size * 2 - 1);
     uinf_zero(y);
     y.data[out.size-1] = 1;
-    printf("x = %lu = %f\n", uinf_read64_high(y), (float)uinf_read64_high(y)/(float)(1UL << 32UL));
-    log2(x, y);
-    printf("1/ln(2) = %lu = %f\n", uinf_read64_low(x), (float)uinf_read64_low(x)/(float)(1UL << 32UL));
+    inclog2(x, y);
     for (size_t i = 0; i < out.size; i++) {
         out.data[i] = x.data[i];
     }
 }
 
 // p'(x) = ln(2)2^x
-// <=> log_2(p'(x)/2^x) - x = 0
+// <=> log_2(p'(x)/ln(2)) - x = 0
 // so set g = log_2, c = 1/ln(2)
+// but to make sure that c*p'(x) is in [0, 1] we also divide by 4
+// giving c = 1/(4*ln(2))
 void initialize_cp_powb() {
     critical_point_x_exp = 32;
     critical_point_dpx_exp = 32;
     critical_point_g = log2;
 
-    reciprocol_ln2(critical_point_c);
-    critical_point_c_exp = 32;
+    UINF_ALLOCA(c, critical_point_c.size + 1);
+    reciprocol_ln2(c);
+    uinf_rshift(c, 2);
+    uinf_write_low(critical_point_c, c);
+    critical_point_c_exp = 64;
 }
 
 // p'(x) = 2pi*cos(2pi*x)
@@ -799,11 +788,13 @@ void render(char *name,
         ys[i] = uinf_read64_low(y);
 
         u32 actual = 0;
-        //bisect(finv, (uinf){1, &actual}, (uinf){1, &x32}, increasing, 32, false);
-        //dys[i] = (long)ys[i] - (long)actual;
-        critical_point_function((uinf){1, &actual}, (uinf){1, &x32});
-        if (finv == log2) printf("y = %x\n", actual);
-        dys[i] = (long)(int)actual;
+        if (false) { // true for error, false for critical function
+            bisect(finv, (uinf){1, &actual}, (uinf){1, &x32}, increasing, 32, false);
+            dys[i] = (long)ys[i] - (long)actual;
+        } else {
+            critical_point_function((uinf){1, &actual}, (uinf){1, &x32});
+            dys[i] = (long)(int)actual;
+        }
     }
 
     const u64 search_bits = 28;
@@ -863,7 +854,10 @@ void render(char *name,
             }
 
             if (incident) {
-                green = 255 - cyan;
+                green = bright - green;
+                if (dys[i] < 0) {
+                    red = bright - red;
+                }
             }
             fputc(red, out);
             fputc(green, out);
@@ -901,11 +895,10 @@ int main() {
     critical_point_dp = dmodel;
     critical_point_dpx_exp = 64;
 
-    //model_initialize(1UL<<31UL, 1UL<<31UL, 0);
+    model_initialize(1UL<<31UL, 1UL<<31UL, 0);
     initialize_cp_powb();
-    /*
     render("powb.ppg",
-            log2, model,
+            inclog2, model,
             SQRTMAX64, SQRTMAX64-2);
     model_initialize(~0UL<<36UL,1UL<<35UL,0);
     initialize_cp_sin();
@@ -917,6 +910,5 @@ int main() {
     render("cos.ppg",
             arccos, model,
             SQRTMAX64, SQRTMAX64/4);
-            */
 }
 
