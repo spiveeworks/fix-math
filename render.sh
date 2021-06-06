@@ -1,6 +1,6 @@
 #!/bin/sh
 tcc -run approx.c
-for i in *.ppg
+for i in *.ppm
 do
     convert "$i" "$i.png"
 done

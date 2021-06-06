@@ -914,17 +914,17 @@ int main() {
 
     model_initialize(1UL<<31UL, 1UL<<31UL, 0);
     initialize_cp_powb();
-    render("powb.ppg",
+    render("powb.ppm",
             inclog2, model,
             SQRTMAX64, SQRTMAX64-2);
     model_initialize(~0UL<<36UL,1UL<<35UL,0);
     initialize_cp_sin();
-    render("sin.ppg",
+    render("sin.ppm",
             arcsin, model,
             SQRTMAX64, SQRTMAX64/4);
     model_initialize((~0UL<<36UL),0,(1UL<<32UL)-1);
     initialize_cp_cos();
-    render("cos.ppg",
+    render("cos.ppm",
             arccos, model,
             SQRTMAX64, SQRTMAX64/4);
 }
