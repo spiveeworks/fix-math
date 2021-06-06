@@ -544,8 +544,25 @@ u32 bisect32(u32 (*f)(u32), u32 y, bool increasing) {
 // Assumes that these bits are initially 0.
 void bisect(
     void (*f)(uinf, uinf), uinf x, uinf y,
-    bool increasing, u64 n, bool is_signed
+    u64 n, bool is_signed
 ) {
+    bool increasing;
+    {
+        UINF_ALLOCA(xswp, x.size)
+
+        UINF_ALLOCA(yl, y.size)
+        uinf_zero(yl);
+        uinf_write_low(xswp, x);
+        f(yl, xswp);
+
+        UINF_ALLOCA(yr, y.size)
+        uinf_zero(yr);
+        uinf_write_low(xswp, x);
+        f(yr, xswp);
+
+        signed cmp = is_signed ? uinf_cmp_signed(yl, yr) : uinf_cmp(yl, yr);
+        increasing = cmp <= 0;
+    }
     UINF_ALLOCA(yc, y.size)
     UINF_ALLOCA(newx, x.size)
     for (long i = x.size-1; i >= 0; i--) {
@@ -789,7 +806,7 @@ void render(char *name,
 
         u32 actual = 0;
         if (false) { // true for error, false for critical function
-            bisect(finv, (uinf){1, &actual}, (uinf){1, &x32}, increasing, 32, false);
+            bisect(finv, (uinf){1, &actual}, (uinf){1, &x32}, 32, false);
             dys[i] = (long)ys[i] - (long)actual;
         } else {
             critical_point_function((uinf){1, &actual}, (uinf){1, &x32});
@@ -797,7 +814,7 @@ void render(char *name,
         }
     }
 
-    const u64 search_bits = 28;
+    const u64 search_bits = 30;
     u64 search_count = 0;
     u64 max_search_count = 1UL << (32 - search_bits);
     u64 extrema[max_search_count];
@@ -809,7 +826,7 @@ void render(char *name,
         UINF_ALLOCA(zero, 2);
         uinf_zero(zero);
 
-        bisect(critical_point_function, x, zero, false, search_bits, true);
+        bisect(critical_point_function, x, zero, search_bits, true);
 
         extrema[i] = uinf_read64_low(x) * (IMAGE_WIDTH - 1) / xscale;
     }
