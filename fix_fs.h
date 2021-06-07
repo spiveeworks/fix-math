@@ -26,4 +26,31 @@ u64 invsqrt_nr(u64 x, u64 order) {
     return y;
 }
 
+u64 invsqrt_nr_rr(u64 x, u64 order) {
+    /* reduce range to [0.5, 2.0) and then do NR as normal*/
+    s64 ilb = ilb64(x) + 1 - order;
+    s64 ilb_even = (u64)ilb & ~1UL;
+    u64 is_neg = (u64)ilb >> 63UL;
+    /* 0xFFFFFFFF if negative, 0x00000000 if positive */
+    u64 neg_mask = -is_neg;
+
+    u64 lshift = neg_mask & (u64)-ilb_even;
+    u64 rshift = (~neg_mask) & (u64)ilb_even;
+
+    x <<= lshift;
+    x >>= rshift;
+
+    u64 y = (1UL << order);
+
+    y = y * ((3UL << order) - ((x * y >> order) * y >> order)) >> (order + 1);
+    y = y * ((3UL << order) - ((x * y >> order) * y >> order)) >> (order + 1);
+    y = y * ((3UL << order) - ((x * y >> order) * y >> order)) >> (order + 1);
+
+    /* map y to the interval corresponding to invsqrt(x) */
+    y <<= lshift >> 1UL;
+    y >>= rshift >> 1UL;
+
+    return y;
+}
+
 #endif
