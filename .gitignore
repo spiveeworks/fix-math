@@ -1,3 +1,7 @@
 test
 *.ppm
 *.png
+*.exe
+*.obj
+*.ilk
+*.pdb

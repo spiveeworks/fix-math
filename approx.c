@@ -1,8 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 
-typedef unsigned u32;
-typedef long unsigned u64;
+/* TODO use uint64 and int64 and word64 and so on? */
+typedef uint32_t u32;
+typedef uint64_t u64;
+typedef int64_t s64;
 
 const u32 HALFMAX32 = (u32)1 << 31;
 const u64 SQRTMAX64 = (u64)1 << 32;
@@ -15,6 +18,10 @@ typedef enum {
     true,
 } bool;
 
+#ifdef _WIN32
+#define alloca _alloca
+#endif
+
 //////////////////////////////
 // uinf
 
@@ -24,9 +31,13 @@ typedef struct {
     u32 *data;
 } uinf;
 
-#define UINF_ALLOCA(name, size) \
-u32 name##_data[size];\
-uinf name = {size, name##_data};
+#define UINF_STATIC(NAME, SIZE) \
+u32 NAME##_data[SIZE];\
+uinf NAME = {SIZE, NAME##_data};
+
+#define UINF_ALLOCA(NAME, SIZE) \
+u32 *NAME##_data = alloca(SIZE * sizeof(u32));\
+uinf NAME = {SIZE, NAME##_data};
 
 void uinf_zero(uinf out) {
     for (u64 i = 0; i < out.size; i++) {
@@ -301,6 +312,7 @@ UINF_ALLOCA(name##_x, size);\
 UINF_ALLOCA(name##_y, size);\
 Rotation name = {name##_qt, name##_x, name##_y};
 
+/*
 void rot_debug(Rotation z1) {
     printf("%016llx *", z1.quarter_turns);
     for (u64 i = 0; i < z1.x.size; i++) {
@@ -311,6 +323,7 @@ void rot_debug(Rotation z1) {
         printf(" %08x", z1.y.data[z1.y.size - i - 1]);
     }
 }
+*/
 
 // out += z1 * z2
 // result will have magnitude adjusted to stop it running to 0/infinity
@@ -463,6 +476,22 @@ void arccos_signed(uinf x, uinf y) {
 // modifies x and y
 // assumes x is initially 0
 void neglog2(uinf x, uinf y) {
+    bool y_zero = true;
+    for (u64 j = 0; j < y.size; j++) {
+        if (y.data[j] != 0) {
+            y_zero = false;
+        }
+    }
+    if (y_zero) {
+        /* y is zero, so log2 is undefined, or negative infinity. Infinity
+           mod 1 is genuinely undefined, but we could pretend that y is just a
+           really tiny power of 2, giving an integer as the result of log2,
+           which overflows to 0. */
+        for (u64 j = 0; j < x.size; j++) {
+            x.data[j] = 0;
+        }
+        return;
+    }
     //   2^64 * log(y)
     // = log(y^(2^64))
     // so calculate (y^(2^64)) as a floating point and discard the mantissa
@@ -470,7 +499,7 @@ void neglog2(uinf x, uinf y) {
     UINF_ALLOCA(out, y.size * 2);
     for (u64 i = 0; i < n; i++) {
         bool lows_all_zero = true;
-        for (u64 j = 0; (long)j <= (long)y.size-2; j++) {
+        for (u64 j = 0; (s64)j <= (s64)y.size-2; j++) {
             if (y.data[j] != 0) {
                 lows_all_zero = false;
             }
@@ -565,7 +594,7 @@ void bisect(
     }
     UINF_ALLOCA(yc, y.size)
     UINF_ALLOCA(newx, x.size)
-    for (long i = x.size-1; i >= 0; i--) {
+    for (s64 i = x.size-1; i >= 0; i--) {
         for (int j = 31; j >= 0; j--) {
             if (i * 32 + j >= n) { continue; }
             uinf_write_low(newx, x);
@@ -624,12 +653,12 @@ poly model;
 
 void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
     uinf_zero(out);
-    for (long i = 0; i < p.terms; i++) {
+    UINF_ALLOCA(swap, p.size + out.size);
+    for (s64 i = 0; i < p.terms; i++) {
         // out *= x
         uinf_mul_rshift_signed(out, x, x_exp);
 
         // out += c
-        UINF_ALLOCA(swap, p.size + out.size);
         uinf_zero(swap);
         uinf c = poly_index(p, p.terms - i - 1);
         uinf_write_signed(swap, c);
@@ -651,7 +680,7 @@ void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
 // function we have implemented already, and a coefficient we can calculate.
 
 void (*critical_point_g)(uinf, uinf);
-UINF_ALLOCA(critical_point_c, 2);
+UINF_STATIC(critical_point_c, 2);
 u64 critical_point_c_exp;
 poly critical_point_dp;
 u64 critical_point_x_exp;
@@ -777,8 +806,8 @@ void initialize_cp_tan() {
 ///////////
 // Render
 
-#define IMAGE_WIDTH 512UL
-#define IMAGE_HEIGHT 512UL
+#define IMAGE_WIDTH 512ULL
+#define IMAGE_HEIGHT 512ULL
 
 void render(char *name,
     void (*finv)(uinf,uinf), poly p,
@@ -794,7 +823,7 @@ void render(char *name,
     bool increasing = xs[3*IMAGE_WIDTH/4] < xs[IMAGE_WIDTH/4];
 
     static u64 ys[IMAGE_WIDTH];
-    static long dys[IMAGE_WIDTH];
+    static s64 dys[IMAGE_WIDTH];
     for (size_t i = 0; i < IMAGE_WIDTH; i++) {
         u32 x32 = i * xscale / (IMAGE_WIDTH-1) + 1;
 
@@ -807,17 +836,18 @@ void render(char *name,
         u32 actual = 0;
         if (false) { // true for error, false for critical function
             bisect(finv, (uinf){1, &actual}, (uinf){1, &x32}, 32, false);
-            dys[i] = (long)ys[i] - (long)actual;
+            dys[i] = (s64)ys[i] - (s64)actual;
         } else {
             critical_point_function((uinf){1, &actual}, (uinf){1, &x32});
-            dys[i] = (long)(int)actual;
+            dys[i] = (s64)(int)actual;
         }
     }
 
+    /*
     const u64 search_bits = 30;
     u64 search_count = 0;
-    u64 max_search_count = 1UL << (32 - search_bits);
-    u64 extrema[max_search_count];
+    u64 max_search_count = 1ULL << (32 - search_bits);
+    u64 *extrema = alloca(max_search_count * sizeof(u64));
     for (size_t i = 0; (i << search_bits) <= xscale; i++) {
         search_count += 1;
 
@@ -830,10 +860,11 @@ void render(char *name,
 
         extrema[i] = uinf_read64_low(x) * (IMAGE_WIDTH - 1) / xscale;
     }
+    */
 
     FILE *out = fopen(name, "wb");
     const u64 bright = 255;
-    fprintf(out, "P6 %lu %lu %lu ", IMAGE_WIDTH, IMAGE_HEIGHT, bright);
+    fprintf(out, "P6 %llu %llu %llu ", IMAGE_WIDTH, IMAGE_HEIGHT, bright);
     for (size_t j = 0; j < IMAGE_HEIGHT; j++) {
         u64 x0 = xs[j] * (IMAGE_WIDTH - 1) / xscale;
         for (size_t i = 0; i < IMAGE_WIDTH; i++) {
@@ -856,7 +887,7 @@ void render(char *name,
                 red = bright - red;
             }
 
-            long dy0 = IMAGE_HEIGHT/2 + dys[i]*((long)IMAGE_HEIGHT - 1)/(long)yscale;
+            s64 dy0 = IMAGE_HEIGHT/2 + dys[i]*((s64)IMAGE_HEIGHT - 1)/(s64)yscale;
             int green = cyan;
             int blue = cyan;
             bool incident = false;
@@ -864,6 +895,7 @@ void render(char *name,
                 incident = true;
             }
 
+            /*
             for (size_t s = 0; s < search_count; s++) {
                 if (i == extrema[s]) {
                     incident = true;
@@ -876,6 +908,7 @@ void render(char *name,
                     red = bright - red;
                 }
             }
+            */
             fputc(red, out);
             fputc(green, out);
             fputc(blue, out);
@@ -891,7 +924,7 @@ void render(char *name,
 POLY_ALLOCA(model, MODEL_TERMS, MODEL_EXP, MODEL_SIZE);
 POLY_ALLOCA(dmodel, MODEL_TERMS, MODEL_EXP, MODEL_SIZE);
 
-UINF_ALLOCA(r2pi, 2);
+UINF_STATIC(r2pi, 2);
 
 void model_initialize(u64 a, u64 b, u64 c) {
     uinf_assign64_low(poly_index(model, 0), c);
@@ -912,17 +945,17 @@ int main() {
     critical_point_dp = dmodel;
     critical_point_dpx_exp = 64;
 
-    model_initialize(1UL<<31UL, 1UL<<31UL, 0);
+    model_initialize(1ULL<<31ULL, 1ULL<<31ULL, 0);
     initialize_cp_powb();
     render("powb.ppm",
             inclog2, model,
             SQRTMAX64, SQRTMAX64-2);
-    model_initialize(~0UL<<36UL,1UL<<35UL,0);
+    model_initialize(~0ULL<<36ULL,1ULL<<35ULL,0);
     initialize_cp_sin();
     render("sin.ppm",
             arcsin, model,
             SQRTMAX64, SQRTMAX64/4);
-    model_initialize((~0UL<<36UL),0,(1UL<<32UL)-1);
+    model_initialize((~0ULL<<36ULL),0,(1ULL<<32ULL)-1);
     initialize_cp_cos();
     render("cos.ppm",
             arccos, model,
