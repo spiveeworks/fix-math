@@ -31,8 +31,8 @@ typedef struct {
 u32 NAME##_data[SIZE];\
 uinf NAME = {SIZE, NAME##_data};
 
-#define UINF_ALLOCA(NAME, SIZE) \
-u32 *NAME##_data = alloca(SIZE * sizeof(u32));\
+#define UINF_MALLOC(NAME, SIZE) \
+u32 *NAME##_data = malloc(SIZE * sizeof(u32));\
 uinf NAME = {SIZE, NAME##_data};
 
 void uinf_zero(uinf out) {
@@ -182,6 +182,15 @@ void uinf_sub(uinf out, uinf x, uinf y) {
     }
 }
 
+bool uinf_eq_zero(uinf x) {
+    for (u64 i = 0; i < x.size; i++) {
+        if (x.data[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 signed uinf_cmp(uinf x, uinf y) {
     u64 i = x.size < y.size ? y.size : x.size;
     while (i > 0) {
@@ -279,7 +288,7 @@ void uinf_mul_rshift_signed(uinf out, uinf x, u64 x_exp) {
         xsign = true;
         uinf_negate(x);
     }
-    UINF_ALLOCA(temp, out.size + x.size);
+    UINF_MALLOC(temp, out.size + x.size);
     uinf_zero(temp);
     uinf_mul(temp, out, x);
     uinf_rshift(temp, x_exp);
@@ -302,10 +311,10 @@ typedef struct {
     uinf y;
 } Rotation;
 
-#define ROT_ALLOCA(name, size) \
-UINF_ALLOCA(name##_qt, size);\
-UINF_ALLOCA(name##_x, size);\
-UINF_ALLOCA(name##_y, size);\
+#define ROT_MALLOC(name, size) \
+UINF_MALLOC(name##_qt, size);\
+UINF_MALLOC(name##_x, size);\
+UINF_MALLOC(name##_y, size);\
 Rotation name = {name##_qt, name##_x, name##_y};
 
 /*
@@ -377,11 +386,11 @@ void arctan(uinf x, uinf y) {
     // = 4 * arg((1 + iy)^(2^(n-2)))
     // = quarter turns of (1 + iy)^(2^(n-2))
     const u64 n = y.size * 32;
-    UINF_ALLOCA(z_x, y.size);
+    UINF_MALLOC(z_x, y.size);
     Rotation z = {x, z_x, y};
     uinf_halfmax(z.x);
     uinf_rshift(y, 1);
-    ROT_ALLOCA(out, 2*y.size);
+    ROT_MALLOC(out, 2*y.size);
     for (u64 i = 0; i < n-2; i++) {
         uinf_zero(out.quarter_turns);
         uinf_zero(out.x);
@@ -409,8 +418,8 @@ void arcspread(uinf x, uinf s) {
     //                       = cos^2(2theta)
     //                       = 1 - sin^2(2theta)
     const u64 n = x.size * 32;
-    UINF_ALLOCA(negs, s.size);
-    UINF_ALLOCA(out, 2 * s.size);
+    UINF_MALLOC(negs, s.size);
+    UINF_MALLOC(out, 2 * s.size);
     bool shift = false;
     for (u64 i = 0; i < n-2; i++) {
         shift = s.data[s.size - 1] & HALFMAX32;
@@ -438,7 +447,7 @@ void arcspread(uinf x, uinf s) {
 // modifies x but not y
 // assumes x is initially 0
 void arcsin(uinf x, uinf y) {
-    UINF_ALLOCA(out, 2 * y.size);
+    UINF_MALLOC(out, 2 * y.size);
     uinf_zero(out);
     uinf_mul(out, y, y);
     uinf s = {y.size + 1, out.data + y.size - 1};
@@ -448,7 +457,7 @@ void arcsin(uinf x, uinf y) {
 // modifies x but not y
 // assumes x is initially 0
 void arccos(uinf x, uinf y) {
-    UINF_ALLOCA(out, 2 * y.size);
+    UINF_MALLOC(out, 2 * y.size);
     uinf_zero(out);
     uinf_mul(out, y, y);
     uinf s = {y.size + 1, out.data + y.size - 1};
@@ -472,27 +481,19 @@ void arccos_signed(uinf x, uinf y) {
 // modifies x and y
 // assumes x is initially 0
 void neglog2(uinf x, uinf y) {
-    bool y_zero = true;
-    for (u64 j = 0; j < y.size; j++) {
-        if (y.data[j] != 0) {
-            y_zero = false;
-        }
-    }
-    if (y_zero) {
+    if (uinf_eq_zero(y)) {
         /* y is zero, so log2 is undefined, or negative infinity. Infinity
            mod 1 is genuinely undefined, but we could pretend that y is just a
            really tiny power of 2, giving an integer as the result of log2,
            which overflows to 0. */
-        for (u64 j = 0; j < x.size; j++) {
-            x.data[j] = 0;
-        }
+        uinf_zero(x);
         return;
     }
     //   2^64 * log(y)
     // = log(y^(2^64))
     // so calculate (y^(2^64)) as a floating point and discard the mantissa
     const u64 n = y.size * 32;
-    UINF_ALLOCA(out, y.size * 2);
+    UINF_MALLOC(out, y.size * 2);
     for (u64 i = 0; i < n; i++) {
         bool lows_all_zero = true;
         for (u64 j = 0; (s64)j <= (s64)y.size-2; j++) {
@@ -509,9 +510,7 @@ void neglog2(uinf x, uinf y) {
             uinf_lshift(x, n - i);
             return;
         }
-        for (u64 j = 0; j < out.size; j++) {
-            out.data[j] = 0;
-        }
+        uinf_zero(out);
         uinf_mul(out, y, y);
         uinf_lshift(x, 1);
         while (!(out.data[out.size - 1] & HALFMAX32)) {
@@ -573,14 +572,14 @@ void bisect(
 ) {
     bool increasing;
     {
-        UINF_ALLOCA(xswp, x.size)
+        UINF_MALLOC(xswp, x.size)
 
-        UINF_ALLOCA(yl, y.size)
+        UINF_MALLOC(yl, y.size)
         uinf_zero(yl);
         uinf_write_low(xswp, x);
         f(yl, xswp);
 
-        UINF_ALLOCA(yr, y.size)
+        UINF_MALLOC(yr, y.size)
         uinf_zero(yr);
         uinf_write_low(xswp, x);
         f(yr, xswp);
@@ -588,8 +587,8 @@ void bisect(
         signed cmp = is_signed ? uinf_cmp_signed(yl, yr) : uinf_cmp(yl, yr);
         increasing = cmp <= 0;
     }
-    UINF_ALLOCA(yc, y.size)
-    UINF_ALLOCA(newx, x.size)
+    UINF_MALLOC(yc, y.size)
+    UINF_MALLOC(newx, x.size)
     for (s64 i = x.size-1; i >= 0; i--) {
         for (int j = 31; j >= 0; j--) {
             if (i * 32 + j >= n) { continue; }
@@ -646,7 +645,7 @@ void poly_diff(poly p) {
 
 void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
     uinf_zero(out);
-    UINF_ALLOCA(swap, p.size + out.size);
+    UINF_MALLOC(swap, p.size + out.size);
     for (s64 i = 0; i < p.terms; i++) {
         // out *= x
         uinf_mul_rshift_signed(out, x, x_exp);
@@ -661,18 +660,34 @@ void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
     }
 }
 
+//////////////////////////////
+// constants
+
 // near 0 we have x ~= sin(x) ~= tan(x)
 // in radians we have implemented arctan(x)/2pi
 // so set x to 2^-n and calculate
 // arctan(x)/2pi = x/2pi = 2^-n/2pi
 // and return the low bits of this
 void reciprocol_twopi(uinf out) {
-    UINF_ALLOCA(x, out.size * 2);
+    UINF_MALLOC(x, out.size * 2);
     uinf_zero(x);
-    UINF_ALLOCA(y, out.size * 2);
+    UINF_MALLOC(y, out.size * 2);
     uinf_zero(y);
     y.data[out.size] = 1;
     arctan(x, y);
+    for (size_t i = 0; i < out.size; i++) {
+        out.data[i] = x.data[i];
+    }
+}
+
+void twopi_frac_part(uinf out) {
+    /* TODO implement long division, to calculate twopi out of r2pi */
+    UINF_MALLOC(x, out.size * 2);
+    uinf_zero(x);
+    UINF_MALLOC(y, out.size * 2);
+    uinf_zero(y);
+    y.data[out.size] = 1;
+    bisect(arctan, x, y, y.size * 32, false);
     for (size_t i = 0; i < out.size; i++) {
         out.data[i] = x.data[i];
     }
@@ -687,9 +702,9 @@ void reciprocol_twopi(uinf out) {
 //
 // note 1/ln(2) is greater than 1 so the the top word of out is just 1
 void reciprocol_ln2(uinf out) {
-    UINF_ALLOCA(x, out.size * 2 - 1);
+    UINF_MALLOC(x, out.size * 2 - 1);
     uinf_zero(x);
-    UINF_ALLOCA(y, out.size * 2 - 1);
+    UINF_MALLOC(y, out.size * 2 - 1);
     uinf_zero(y);
     y.data[out.size-1] = 1;
     inclog2(x, y);
@@ -722,9 +737,9 @@ void render(char *name,
     for (size_t i = 0; i < IMAGE_WIDTH; i++) {
         u32 x32 = i * xscale / (IMAGE_WIDTH-1) + 1;
 
-        UINF_ALLOCA(x, 2);
+        UINF_MALLOC(x, 2);
         uinf_assign64_low(x, x32);
-        UINF_ALLOCA(y, 2);
+        UINF_MALLOC(y, 2);
         poly_eval(y, p, x, 32, 32);
         ys[i] = uinf_read64_low(y);
 
@@ -781,8 +796,6 @@ void render(char *name,
 POLY_STATIC(model, MODEL_TERMS, MODEL_EXP, MODEL_SIZE);
 POLY_STATIC(dmodel, MODEL_TERMS, MODEL_EXP, MODEL_SIZE);
 
-UINF_STATIC(r2pi, 2);
-
 void model_initialize(u64 a, u64 b, u64 c) {
     uinf_assign64_low(poly_index(model, 0), c);
     uinf_assign64_low(poly_index(model, 1), b);
@@ -792,11 +805,48 @@ void model_initialize(u64 a, u64 b, u64 c) {
     uinf_assign64_low(poly_index(dmodel, 1), b);
     uinf_assign64_low(poly_index(dmodel, 2), a);
     poly_diff(dmodel);
-
-    reciprocol_twopi(r2pi);
 }
 
-int main() {
+void print_frac_part(uinf x) {
+    u32 ten_val = 10;
+    uinf ten = {1, &ten_val};
+
+    UINF_MALLOC(out, x.size + 1);
+
+    /* 2^320 is about 2e96, but we don't trust the bottom few bits anyway, so
+       just print 95 digits for every 10 ints. */
+    u32 digits = x.size * 95 / 10;
+    for (int i = 0; i < digits; i++) {
+        uinf_zero(out);
+        uinf_mul(out, x, ten);
+        putc('0' + out.data[out.size - 1], stdout);
+        bool all_zero = true;
+        for (int i = 0; i < x.size; i++) {
+            u32 val = out.data[i];
+            if (val != 0) all_zero = false;
+            x.data[i] = val;
+        }
+        if (all_zero) return;
+    }
+}
+
+void print_constants(void) {
+    /* 11 ints gives about 104 digits of decimal expansion. */
+    UINF_MALLOC(c, 4);
+
+    printf("pi = 3.");
+    twopi_frac_part(c);
+    uinf_rshift(c, 1);
+    print_frac_part(c);
+    printf("\n");
+
+    printf("1/2pi = 0.");
+    reciprocol_twopi(c);
+    print_frac_part(c);
+    printf("\n");
+}
+
+void render_all(void) {
     model_initialize(1ULL<<31ULL, 1ULL<<31ULL, 0);
     render("powb.ppm",
             inclog2, model,
@@ -813,5 +863,9 @@ int main() {
     render("tan.ppm",
             arctan, model,
             SQRTMAX64, SQRTMAX64/8);
+}
+
+int main() {
+    print_constants();
 }
 
