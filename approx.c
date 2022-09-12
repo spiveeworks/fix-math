@@ -31,9 +31,13 @@ typedef struct {
 u32 NAME##_data[SIZE];\
 uinf NAME = {SIZE, NAME##_data};
 
-#define UINF_MALLOC(NAME, SIZE) \
-u32 *NAME##_data = malloc(SIZE * sizeof(u32));\
-uinf NAME = {SIZE, NAME##_data};
+/* We set this to malloc because alloca seems to behave weird on Windows? The
+   debugger gets very confused, and sometimes the behaviour of the program
+   seems to agree? TODO: Switch to our own stack allocator, to handle
+   freeing. */
+uinf uinf_alloc(u64 size) {
+    return (uinf){size, malloc(size * sizeof(u32))};
+}
 
 void uinf_zero(uinf out) {
     for (u64 i = 0; i < out.size; i++) {
@@ -49,24 +53,24 @@ void uinf_negative_one(uinf out) {
 
 void uinf_assign64_high(uinf out, u64 x) {
     uinf_zero(out);
-    out.data[out.size - 2] = x & LO;
     out.data[out.size - 1] = x >> 32;
+    if (out.size > 1) out.data[out.size - 2] = x & LO;
 }
 
 u64 uinf_read64_high(uinf x) {
     u64 hi = x.data[x.size-1];
-    u64 lo = x.data[x.size-2];
+    u64 lo = x.size > 1 ? x.data[x.size-2] : 0;
     return (hi << 32) | lo;
 }
 
 void uinf_assign64_low(uinf out, u64 x) {
     uinf_zero(out);
     out.data[0] = x & LO;
-    out.data[1] = x >> 32;
+    if (out.size > 1) out.data[1] = x >> 32;
 }
 
 u64 uinf_read64_low(uinf x) {
-    u64 hi = x.data[1];
+    u64 hi = x.size > 1 ? x.data[1] : 0;
     u64 lo = x.data[0];
     return (hi << 32) | lo;
 }
@@ -114,11 +118,13 @@ bool uinf_add(uinf out, uinf x, uinf y) {
         }
         out.data[i] = carry & LO; // the mask might be implicit from downcast
         carry >>= 32;
+        /* TODO: after we finish both inputs, check if carry is 0 and break? */
     }
     return carry;
 }
 
 bool uinf_inc(uinf out) {
+    /* TODO: Break this up into simpler logic, like uinf_negate? */
     u64 carry = 1;
     for (u64 i = 0; i < out.size; i++) {
         carry += out.data[i];
@@ -126,6 +132,42 @@ bool uinf_inc(uinf out) {
         carry >>= 32;
     }
     return carry;
+}
+
+// two's complement
+// equivalent to uinf_sub(x, {0, 0}, x);
+void uinf_negate(uinf x) {
+    u64 i = 0;
+    /* First skip all the zeros, which negate to 0. */
+    while (i < x.size && !x.data[i]) i++;
+    /* Then negate one element using two's complement. */
+    if (i < x.size) {
+        x.data[i] = ~x.data[i] + 1;
+        i++;
+    }
+    /* Then the +1 of two's complement has been done, so we can just continue
+       with one's complement for the higher ints. */
+    while (i < x.size) {
+        x.data[i] = ~x.data[i];
+        i++;
+    }
+}
+
+void uinf_sub(uinf out, uinf x, uinf y) {
+    // x - y = x + (-y) = x + ~y + 1
+    u64 carry = 1;
+    for (u64 i = 0; i < out.size; i++) {
+        if (i < x.size) {
+            carry += x.data[i];
+        }
+        if (i < y.size) {
+            carry += ~y.data[i];
+        } else {
+            carry += 0xFFFFFFFF;
+        }
+        x.data[i] = carry & LO; // the mask might be implicit from downcast
+        carry >>= 32;
+    }
 }
 
 // out += x * y
@@ -136,14 +178,21 @@ bool uinf_inc(uinf out) {
 u32 uinf_mul(uinf out, uinf x, uinf y) {
     u32 carry = 0;
     for (u64 offset = 0; offset < out.size; offset++) {
+        /* As we calculate more and more, we figure out what certain ints will
+           be, starting with the least significant int, and moving up. Create a
+           uinf without these finished ints included, so that we can add new
+           values directly to the more significant ints. */
         uinf out_slice = out;
         out_slice.size -= offset;
         out_slice.data += offset;
+
+        /* Find all pairs i, j that add up to offset, and multiply them. */
         u64 xwidth = offset < x.size - 1 ? offset : x.size - 1;
         u64 ywidth = offset < y.size - 1 ? offset : y.size - 1;
         for (u64 i = offset - ywidth; i <= xwidth; i++) {
             u64 j = offset - i;
-            
+
+            /* Full multiply, then uinf add. */
             u64 prod_long = (u64)x.data[i] * (u64)y.data[j];
             u32 prod_data[2] = {prod_long & LO, prod_long >> 32};
             uinf prod = {2, prod_data};
@@ -153,32 +202,26 @@ u32 uinf_mul(uinf out, uinf x, uinf y) {
     return carry;
 }
 
-// twos complement
-// equivalent to uinf_sub(x, {0, 0}, x);
-void uinf_negate(uinf x) {
-    u64 i = 0;
-    while (i < x.size && !x.data[i]) i++;
-    if (i < x.size) {
-        x.data[i] = ~x.data[i] + 1;
-        i++;
-    }
-    while (i < x.size) {
-        x.data[i] = ~x.data[i];
-        i++;
-    }
-}
+// out -= x * y
+void uinf_mul_sub(uinf out, uinf x, uinf y) {
+    for (u64 offset = 0; offset < out.size; offset++) {
+        uinf out_slice = out;
+        out_slice.size -= offset;
+        out_slice.data += offset;
 
-void uinf_sub(uinf out, uinf x, uinf y) {
-    u64 carry = 1;
-    for (u64 i = 0; i < out.size; i++) {
-        if (i < x.size) {
-            carry += x.data[i];
+        /* Same looping structure as mul with add. */
+        u64 xwidth = offset < x.size - 1 ? offset : x.size - 1;
+        u64 ywidth = offset < y.size - 1 ? offset : y.size - 1;
+        for (u64 i = offset - ywidth; i <= xwidth; i++) {
+            u64 j = offset - i;
+
+            /* Full multiply, as before. */
+            u64 prod_long = (u64)x.data[i] * (u64)y.data[j];
+            u32 prod_data[2] = {prod_long & LO, prod_long >> 32};
+            uinf prod = {2, prod_data};
+            /* TODO: collect borrow and return? */
+            uinf_sub(out_slice, out_slice, prod);
         }
-        if (i < y.size) {
-            carry += ~y.data[i];
-        }
-        x.data[i] = carry & LO; // the mask might be implicit from downcast
-        carry >>= 32;
     }
 }
 
@@ -276,6 +319,104 @@ void uinf_lshift(uinf x, u64 shift) {
 
 }
 
+// out += remainder / divisor
+// remainder %= divisor
+// like uinf_mul, one typically wants to zero out first.
+void uinf_div(uinf out, uinf remainder, uinf divisor) {
+    uinf quotient_piece = uinf_alloc(3);
+
+    while (divisor.size > 1 && divisor.data[divisor.size - 1] == 0) {
+        divisor.size -= 1;
+    }
+    u64 divisor_approx = divisor.data[divisor.size - 1];
+    int shift = 0;
+    while (divisor_approx < 0x80000000) {
+        shift += 1;
+        divisor_approx <<= 1;
+    }
+
+    // TODO: maybe we can branch into a faster scalar divide algorithm, if
+    // there are only 32 bits to worry about? We still get a significant speed
+    // benefit when divisor_approx is exact, though!
+    if (divisor.size >= 2) {
+        u32 next = divisor.data[divisor.size - 2];
+        u32 next_shift = 32U - shift;
+        divisor_approx |= next >> next_shift;
+        u32 mask = (1U << next_shift) - 1U;
+        if ((next & mask) != 0) {
+            divisor_approx += 1;
+        } else {
+            for (int i = 0; i < divisor.size - 2; i++) {
+                if (divisor.data[i] != 0) {
+                    // Round up, to be conservative.
+                    divisor_approx += 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    while (1) {
+        while (remainder.size > 0 && remainder.data[remainder.size - 1] == 0) {
+            remainder.size -= 1;
+        }
+        if (remainder.size < divisor.size) {
+            return;
+        }
+
+        u64 remainder_approx = uinf_read64_high(remainder);
+        s64 offset; // number of whole ints the divisor is being shifted
+        if (remainder.size == divisor.size) {
+            // Shift remainder back 32, forward shift, to match divisor_approx.
+            remainder_approx >>= 32U - shift;
+            // No whole valued shift.
+            offset = 0;
+        } else {
+            // Remainder is bigger than divisor by some arbitrary amount, so
+            // shift divisor until it is just one int behind.
+            offset = remainder.size - divisor.size - 1;
+        }
+        // Do an approximate division, to get an idea of how much to subtract.
+        // At the end of the day long division is still just repeated
+        // subtraction.
+        u64 q = remainder_approx / divisor_approx;
+        // subtract `q * divisor` from out, implementing `offset` by skipping
+        // the low ints of `out` entirely.
+        uinf out_slice = out;
+        uinf rem_slice = remainder;
+        if (q > 0) {
+            out_slice.size -= offset;
+            out_slice.data += offset;
+            rem_slice.size -= offset;
+            rem_slice.data += offset;
+            uinf_assign64_low(quotient_piece, q);
+            if (remainder.size != divisor.size) {
+                // If we shifted divisor, but not remainder, then we should
+                // shift the quotient as well, since we have found many
+                // multiples of the divisor, not just one.
+                uinf_lshift(quotient_piece, shift);
+            }
+            uinf_mul_sub(rem_slice, quotient_piece, divisor);
+            uinf_add(out_slice, out_slice, quotient_piece);
+        } else if (remainder.size == divisor.size) {
+            // The remainder and divisor can agree on their 32 most significant
+            // bits, while still being different at lower order bits. We do a
+            // single comparison and subtraction if this is the case, after
+            // which remainder should be less than 4 billionths of the size of
+            // divisor.
+            if (uinf_cmp(remainder, divisor) >= 0) {
+                uinf_sub(remainder, remainder, divisor);
+                uinf_inc(out);
+            }
+            return;
+        } else {
+            fprintf(stderr, "Error: Predicted q = 0 during long division? "
+                "File %s, line %d.\n", __FILE__, __LINE__);
+            exit(1);
+        }
+    }
+}
+
 // could make a finf type?
 void uinf_mul_rshift_signed(uinf out, uinf x, u64 x_exp) {
     bool outsign = false;
@@ -288,7 +429,7 @@ void uinf_mul_rshift_signed(uinf out, uinf x, u64 x_exp) {
         xsign = true;
         uinf_negate(x);
     }
-    UINF_MALLOC(temp, out.size + x.size);
+    uinf temp = uinf_alloc(out.size + x.size);
     uinf_zero(temp);
     uinf_mul(temp, out, x);
     uinf_rshift(temp, x_exp);
@@ -311,11 +452,9 @@ typedef struct {
     uinf y;
 } Rotation;
 
-#define ROT_MALLOC(name, size) \
-UINF_MALLOC(name##_qt, size);\
-UINF_MALLOC(name##_x, size);\
-UINF_MALLOC(name##_y, size);\
-Rotation name = {name##_qt, name##_x, name##_y};
+Rotation rot_alloc(int size) {
+    return (Rotation){uinf_alloc(size), uinf_alloc(size), uinf_alloc(size)};
+}
 
 /*
 void rot_debug(Rotation z1) {
@@ -386,11 +525,11 @@ void arctan(uinf x, uinf y) {
     // = 4 * arg((1 + iy)^(2^(n-2)))
     // = quarter turns of (1 + iy)^(2^(n-2))
     const u64 n = y.size * 32;
-    UINF_MALLOC(z_x, y.size);
+    uinf z_x = uinf_alloc(y.size);
     Rotation z = {x, z_x, y};
     uinf_halfmax(z.x);
     uinf_rshift(y, 1);
-    ROT_MALLOC(out, 2*y.size);
+    Rotation out = rot_alloc(2*y.size);
     for (u64 i = 0; i < n-2; i++) {
         uinf_zero(out.quarter_turns);
         uinf_zero(out.x);
@@ -418,8 +557,8 @@ void arcspread(uinf x, uinf s) {
     //                       = cos^2(2theta)
     //                       = 1 - sin^2(2theta)
     const u64 n = x.size * 32;
-    UINF_MALLOC(negs, s.size);
-    UINF_MALLOC(out, 2 * s.size);
+    uinf negs = uinf_alloc(s.size);
+    uinf out = uinf_alloc(2 * s.size);
     bool shift = false;
     for (u64 i = 0; i < n-2; i++) {
         shift = s.data[s.size - 1] & HALFMAX32;
@@ -447,7 +586,7 @@ void arcspread(uinf x, uinf s) {
 // modifies x but not y
 // assumes x is initially 0
 void arcsin(uinf x, uinf y) {
-    UINF_MALLOC(out, 2 * y.size);
+    uinf out = uinf_alloc(2 * y.size);
     uinf_zero(out);
     uinf_mul(out, y, y);
     uinf s = {y.size + 1, out.data + y.size - 1};
@@ -457,7 +596,7 @@ void arcsin(uinf x, uinf y) {
 // modifies x but not y
 // assumes x is initially 0
 void arccos(uinf x, uinf y) {
-    UINF_MALLOC(out, 2 * y.size);
+    uinf out = uinf_alloc(2 * y.size);
     uinf_zero(out);
     uinf_mul(out, y, y);
     uinf s = {y.size + 1, out.data + y.size - 1};
@@ -493,7 +632,7 @@ void neglog2(uinf x, uinf y) {
     // = log(y^(2^64))
     // so calculate (y^(2^64)) as a floating point and discard the mantissa
     const u64 n = y.size * 32;
-    UINF_MALLOC(out, y.size * 2);
+    uinf out = uinf_alloc(y.size * 2);
     for (u64 i = 0; i < n; i++) {
         bool lows_all_zero = true;
         for (u64 j = 0; (s64)j <= (s64)y.size-2; j++) {
@@ -572,14 +711,14 @@ void bisect(
 ) {
     bool increasing;
     {
-        UINF_MALLOC(xswp, x.size)
+        uinf xswp = uinf_alloc(x.size);
 
-        UINF_MALLOC(yl, y.size)
+        uinf yl = uinf_alloc(y.size);
         uinf_zero(yl);
         uinf_write_low(xswp, x);
         f(yl, xswp);
 
-        UINF_MALLOC(yr, y.size)
+        uinf yr = uinf_alloc(y.size);
         uinf_zero(yr);
         uinf_write_low(xswp, x);
         f(yr, xswp);
@@ -587,8 +726,8 @@ void bisect(
         signed cmp = is_signed ? uinf_cmp_signed(yl, yr) : uinf_cmp(yl, yr);
         increasing = cmp <= 0;
     }
-    UINF_MALLOC(yc, y.size)
-    UINF_MALLOC(newx, x.size)
+    uinf yc = uinf_alloc(y.size);
+    uinf newx = uinf_alloc(x.size);
     for (s64 i = x.size-1; i >= 0; i--) {
         for (int j = 31; j >= 0; j--) {
             if (i * 32 + j >= n) { continue; }
@@ -645,7 +784,7 @@ void poly_diff(poly p) {
 
 void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
     uinf_zero(out);
-    UINF_MALLOC(swap, p.size + out.size);
+    uinf swap = uinf_alloc(p.size + out.size);
     for (s64 i = 0; i < p.terms; i++) {
         // out *= x
         uinf_mul_rshift_signed(out, x, x_exp);
@@ -669,25 +808,12 @@ void poly_eval(uinf out, poly p, uinf x, u64 x_exp, u64 out_exp) {
 // arctan(x)/2pi = x/2pi = 2^-n/2pi
 // and return the low bits of this
 void reciprocol_twopi(uinf out) {
-    UINF_MALLOC(x, out.size * 2);
+    uinf x = uinf_alloc(out.size * 2);
     uinf_zero(x);
-    UINF_MALLOC(y, out.size * 2);
+    uinf y = uinf_alloc(out.size * 2);
     uinf_zero(y);
     y.data[out.size] = 1;
     arctan(x, y);
-    for (size_t i = 0; i < out.size; i++) {
-        out.data[i] = x.data[i];
-    }
-}
-
-void twopi_frac_part(uinf out) {
-    /* TODO implement long division, to calculate twopi out of r2pi */
-    UINF_MALLOC(x, out.size * 2);
-    uinf_zero(x);
-    UINF_MALLOC(y, out.size * 2);
-    uinf_zero(y);
-    y.data[out.size] = 1;
-    bisect(arctan, x, y, y.size * 32, false);
     for (size_t i = 0; i < out.size; i++) {
         out.data[i] = x.data[i];
     }
@@ -702,9 +828,9 @@ void twopi_frac_part(uinf out) {
 //
 // note 1/ln(2) is greater than 1 so the the top word of out is just 1
 void reciprocol_ln2(uinf out) {
-    UINF_MALLOC(x, out.size * 2 - 1);
+    uinf x = uinf_alloc(out.size * 2 - 1);
     uinf_zero(x);
-    UINF_MALLOC(y, out.size * 2 - 1);
+    uinf y = uinf_alloc(out.size * 2 - 1);
     uinf_zero(y);
     y.data[out.size-1] = 1;
     inclog2(x, y);
@@ -737,9 +863,9 @@ void render(char *name,
     for (size_t i = 0; i < IMAGE_WIDTH; i++) {
         u32 x32 = i * xscale / (IMAGE_WIDTH-1) + 1;
 
-        UINF_MALLOC(x, 2);
+        uinf x = uinf_alloc(2);
         uinf_assign64_low(x, x32);
-        UINF_MALLOC(y, 2);
+        uinf y = uinf_alloc(2);
         poly_eval(y, p, x, 32, 32);
         ys[i] = uinf_read64_low(y);
 
@@ -807,42 +933,111 @@ void model_initialize(u64 a, u64 b, u64 c) {
     poly_diff(dmodel);
 }
 
+// TODO: Make this take an integer representing the size of the fractional
+// part, and print both sides as a full decimal.
 void print_frac_part(uinf x) {
     u32 ten_val = 10;
     uinf ten = {1, &ten_val};
 
-    UINF_MALLOC(out, x.size + 1);
+    uinf out = uinf_alloc(x.size + 1);
+    uinf remainder = uinf_alloc(x.size);
+    uinf_write_high(remainder, x);
 
+    if (remainder.size == 0) {
+        putc('0', stdout);
+        return;
+    }
     /* 2^320 is about 2e96, but we don't trust the bottom few bits anyway, so
        just print 95 digits for every 10 ints. */
-    u32 digits = x.size * 95 / 10;
+    u32 digits = remainder.size * 95 / 10;
     for (int i = 0; i < digits; i++) {
         uinf_zero(out);
-        uinf_mul(out, x, ten);
+        uinf_mul(out, remainder, ten);
         putc('0' + out.data[out.size - 1], stdout);
         bool all_zero = true;
-        for (int i = 0; i < x.size; i++) {
+        for (int i = 0; i < remainder.size; i++) {
             u32 val = out.data[i];
             if (val != 0) all_zero = false;
-            x.data[i] = val;
+            remainder.data[i] = val;
         }
         if (all_zero) return;
     }
 }
 
 void print_constants(void) {
-    /* 11 ints gives about 104 digits of decimal expansion. */
-    UINF_MALLOC(c, 4);
+    {
+        uinf c = uinf_alloc(3);
+        int c_whole_part = 1;
+        int c_frac_part = c.size - c_whole_part;
+        uinf_zero(c);
+        c.data[c.size - c_whole_part] = 4;
+        printf("c = %d\n", c.data[c.size - c_whole_part]);
 
-    printf("pi = 3.");
-    twopi_frac_part(c);
-    uinf_rshift(c, 1);
-    print_frac_part(c);
+        int d_whole_part = 1;
+        int d_frac_part = 1;
+        uinf d = uinf_alloc(d_whole_part + d_frac_part);
+        uinf_zero(d);
+        d.data[d_frac_part - 1] = 4;
+        d.data[d.size - d_whole_part] = 0;
+        if (d_whole_part > 0) {
+            printf("d = %d.", d.data[d.size - d_whole_part]);
+            uinf d_frac = {d_frac_part, d.data};
+            print_frac_part(d_frac);
+        } else {
+            printf("d = 0.");
+            print_frac_part(d);
+        }
+        printf("\n");
+
+        uinf q = uinf_alloc(c.size);
+        int q_frac_part = c_frac_part - d_frac_part;
+        int q_whole_part = q.size - q_frac_part;
+        uinf_zero(q);
+        uinf_div(q, c, d);
+        printf("q = {");
+        for (int i = q.size - 1; i >= 0; i--) {
+            printf("0x%08X", q.data[i]);
+            if (i > 0) {
+                printf(", ");
+            }
+        }
+        printf("}\n");
+        printf("c = %lld.", (u64)q.data[q.size - q_whole_part + 1] << 32
+            | q.data[q.size - q_whole_part]);
+        uinf q_frac = {q_frac_part, q.data};
+        print_frac_part(q_frac);
+        printf(" * d + %d.", c.data[c.size - c_whole_part]);
+        uinf c_frac = {c_frac_part, c.data};
+        print_frac_part(c_frac);
+        printf("\n");
+
+        uinf_mul(c, q, d);
+        printf("c = %d.", c.data[c.size - c_whole_part]);
+        print_frac_part(c_frac);
+        printf("\n");
+    }
+
     printf("\n");
 
+    /* 11 ints gives about 104 digits of good decimal expansion. */
+    uinf r2pi = uinf_alloc(11);
     printf("1/2pi = 0.");
-    reciprocol_twopi(c);
-    print_frac_part(c);
+    reciprocol_twopi(r2pi);
+    print_frac_part(r2pi);
+    printf("\n");
+
+    uinf pi = uinf_alloc(r2pi.size + 1);
+    uinf remainder = uinf_alloc(2 * r2pi.size);
+    uinf_zero(pi);
+    uinf_zero(remainder);
+    remainder.data[remainder.size - 1] = HALFMAX32;
+    printf("pi = ");
+    // (1/2) / (1/2pi) = 1/2 * 2pi = pi
+    uinf_div(pi, remainder, r2pi);
+    // TODO: Make a mixed fraction printing algorithm.
+    printf("%d.", pi.data[pi.size - 1]);
+    pi.size -= 1;
+    print_frac_part(pi);
     printf("\n");
 }
 
