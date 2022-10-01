@@ -715,12 +715,14 @@ void bisect(
 
         uinf yl = uinf_alloc(y.size);
         uinf_zero(yl);
-        uinf_write_low(xswp, x);
+        uinf_zero(xswp);
+        xswp.data[xswp.size-1] |= 1U << 30;
         f(yl, xswp);
 
         uinf yr = uinf_alloc(y.size);
         uinf_zero(yr);
-        uinf_write_low(xswp, x);
+        uinf_zero(xswp);
+        xswp.data[xswp.size-1] |= 3U << 30;
         f(yr, xswp);
 
         signed cmp = is_signed ? uinf_cmp_signed(yl, yr) : uinf_cmp(yl, yr);
@@ -846,66 +848,62 @@ void reciprocol_ln2(uinf out) {
 #define IMAGE_HEIGHT 512ULL
 
 void render(char *name,
-    void (*finv)(uinf,uinf), poly p,
+    void (*f)(uinf,uinf), bool invert, poly p,
     u64 yscale, u64 xscale
 ) {
-    static u64 xs[IMAGE_HEIGHT];
-    for (size_t j = 0; j < IMAGE_HEIGHT; j++) {
-        u32 y = (IMAGE_HEIGHT - 1 - j) * yscale / (IMAGE_HEIGHT-1) + 1;
-        u32 x = 0;
-        finv((uinf){1, &x}, (uinf){1, &y});
-        xs[j] = x;
-    }
-    bool increasing = xs[3*IMAGE_WIDTH/4] < xs[IMAGE_WIDTH/4];
-
     static u64 ys[IMAGE_WIDTH];
+    static u64 poly_ys[IMAGE_WIDTH];
     static s64 dys[IMAGE_WIDTH];
+
     for (size_t i = 0; i < IMAGE_WIDTH; i++) {
         u32 x32 = i * xscale / (IMAGE_WIDTH-1) + 1;
 
-        uinf x = uinf_alloc(2);
-        uinf_assign64_low(x, x32);
-        uinf y = uinf_alloc(2);
-        poly_eval(y, p, x, 32, 32);
-        ys[i] = uinf_read64_low(y);
+        {
+            uinf x = uinf_alloc(2);
+            uinf_assign64_low(x, x32);
+            uinf y = uinf_alloc(2);
+            poly_eval(y, p, x, 32, 32);
+            poly_ys[i] = uinf_read64_low(y);
+        }
 
-        u32 actual = 0;
-        bisect(finv, (uinf){1, &actual}, (uinf){1, &x32}, 32, false);
-        dys[i] = (s64)ys[i] - (s64)actual;
+        {
+            uinf x = {1, &x32};
+            u32 actual = 0;
+            uinf y = {1, &actual};
+            if (invert) bisect(f, y, x, 32, false);
+            else f(y, x);
+            ys[i] = (s64)actual;
+            dys[i] = (s64)poly_ys[i] - (s64)actual;
+        }
     }
 
     FILE *out = fopen(name, "wb");
     const u64 bright = 255;
     fprintf(out, "P6 %llu %llu %llu ", IMAGE_WIDTH, IMAGE_HEIGHT, bright);
     for (size_t j = 0; j < IMAGE_HEIGHT; j++) {
-        u64 x0 = xs[j] * (IMAGE_WIDTH - 1) / xscale;
         for (size_t i = 0; i < IMAGE_WIDTH; i++) {
-            u64 y0 = ys[i] * (IMAGE_HEIGHT - 1) / yscale;
+            u64 y = IMAGE_HEIGHT-1 - j;
+            u64 poly_y = poly_ys[i] * (IMAGE_HEIGHT - 1) / yscale;
             int cyan = 0;
-            if ((IMAGE_HEIGHT-1 - j) < y0) {
+            if (y < poly_y) {
                 cyan = bright;
-            } else if ((IMAGE_HEIGHT-1 - j) == y0) {
-                u64 rem = ys[i] * (IMAGE_HEIGHT - 1) % yscale;
+            } else if (y == poly_y) {
+                u64 rem = poly_ys[i] * (IMAGE_HEIGHT - 1) % yscale;
                 cyan = rem * bright / yscale;
             }
             int red = 0;
-            if (i < x0) {
+            u64 fun_y = ys[i] * (IMAGE_HEIGHT - 1) / yscale;
+            if (y < fun_y) {
                 red = bright;
-            } else if (i == x0) {
-                u64 rem = xs[j] * (IMAGE_WIDTH - 1) % xscale;
-                red = rem * bright / xscale;
-            }
-            if (increasing) {
-                red = bright - red;
+            } else if (y == fun_y) {
+                u64 rem = ys[i] * (IMAGE_HEIGHT - 1) % yscale;
+                red = rem * bright / yscale;
             }
 
             s64 dy0 = IMAGE_HEIGHT/2 + dys[i]*((s64)IMAGE_HEIGHT - 1)/(s64)yscale;
             int green = cyan;
             int blue = cyan;
-            bool incident = false;
-            if ((IMAGE_HEIGHT-1 - j) == dy0) {
-                incident = true;
-            }
+            bool incident = y == dy0;
 
             fputc(red, out);
             fputc(green, out);
@@ -1044,23 +1042,24 @@ void print_constants(void) {
 void render_all(void) {
     model_initialize(1ULL<<31ULL, 1ULL<<31ULL, 0);
     render("powb.ppm",
-            inclog2, model,
+            inclog2, true, model,
             SQRTMAX64, SQRTMAX64-2);
     model_initialize(~0ULL<<36ULL,1ULL<<35ULL,0);
     render("sin.ppm",
-            arcsin, model,
+            arcsin, true, model,
             SQRTMAX64, SQRTMAX64/4);
     model_initialize((~0ULL<<36ULL),0,(1ULL<<32ULL)-1);
     render("cos.ppm",
-            arccos, model,
+            arccos, true, model,
             SQRTMAX64, SQRTMAX64/4);
     model_initialize(1ULL<<36, 3ULL<<33ULL, 0);
     render("tan.ppm",
-            arctan, model,
+            arctan, true, model,
             SQRTMAX64, SQRTMAX64/8);
 }
 
 int main() {
     print_constants();
+    render_all();
 }
 
