@@ -6,3 +6,8 @@ test
 *.ilk
 *.pdb
 *.rdbg
+
+
+# Added by cargo
+
+/target
