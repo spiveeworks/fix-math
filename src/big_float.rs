@@ -21,11 +21,28 @@ impl BigFloat {
             // negative.
             self.mantissa <<= -exp_change;
         }
+        self.exponent = new_exponent;
     }
 
     pub fn with_exponent(mut self: BigFloat, new_exponent: i64) -> BigFloat {
         self.adjust_exponent(new_exponent);
         self
+    }
+}
+
+// I hate Rust.
+// I really should just make my own refcounted BigUint type, at this rate.
+struct Cow<'a>(std::borrow::Cow<'a, BigFloat>);
+
+impl<'a> From<BigFloat> for Cow<'a> {
+    fn from(it: BigFloat) -> Self {
+        Cow(std::borrow::Cow::Owned(it))
+    }
+}
+
+impl<'a> From<&'a BigFloat> for Cow<'a> {
+    fn from(it: &'a BigFloat) -> Self {
+        Cow(std::borrow::Cow::Borrowed(it))
     }
 }
 
@@ -101,41 +118,130 @@ impl std::fmt::Display for BigFloat {
     }
 }
 
-impl std::ops::AddAssign for BigFloat {
-    fn add_assign(self: &mut BigFloat, mut other: BigFloat) {
-        // The smaller the exponent, the more accuracy we need. Use the
-        // smallest exponent.
-        if other.exponent <= self.exponent {
-            self.adjust_exponent(other.exponent);
-            self.mantissa += other.mantissa;
-        } else {
-            other.adjust_exponent(self.exponent);
-            self.mantissa += other.mantissa;
-        }
+fn match_precisions(a: &mut Cow, b: &mut Cow) {
+    // The smaller the exponent, the more accuracy we need. Use the smallest
+    // exponent.
+    if a.0.exponent > b.0.exponent {
+        a.0.to_mut().adjust_exponent(b.0.exponent);
+    } else if a.0.exponent < b.0.exponent {
+        b.0.to_mut().adjust_exponent(a.0.exponent);
     }
 }
 
-impl std::ops::AddAssign<&BigFloat> for BigFloat {
-    fn add_assign(self: &mut BigFloat, other: &BigFloat) {
-        // The smaller the exponent, the more accuracy we need. Use the
-        // smallest exponent.
-        if other.exponent <= self.exponent {
-            self.adjust_exponent(other.exponent);
-            self.mantissa += &other.mantissa;
-        } else {
-            let adjusted = other.clone().with_exponent(self.exponent);
-            self.mantissa += adjusted.mantissa;
-        }
+fn match_precisions_mut(a: &mut BigFloat, b: &mut Cow) {
+    if a.exponent > b.0.exponent {
+        a.adjust_exponent(b.0.exponent);
+    } else if a.exponent < b.0.exponent {
+        b.0.to_mut().adjust_exponent(a.exponent);
+    }
+}
+
+fn cow_eq(mut a: Cow, mut b: Cow) -> bool {
+    match_precisions(&mut a, &mut b);
+    a.0.mantissa == b.0.mantissa
+}
+
+fn cow_cmp(mut a: Cow, mut b: Cow) -> std::cmp::Ordering {
+    match_precisions(&mut a, &mut b);
+    Ord::cmp(&a.0.mantissa, &b.0.mantissa)
+}
+
+impl PartialEq<BigFloat> for BigFloat {
+    fn eq(self: &BigFloat, other: &BigFloat) -> bool {
+        cow_eq(Cow::from(self), Cow::from(other))
+    }
+}
+
+impl Eq for BigFloat { }
+
+impl PartialOrd for BigFloat {
+    fn partial_cmp(self: &BigFloat, other: &BigFloat)
+        -> Option<std::cmp::Ordering>
+    {
+        Some(cow_cmp(Cow::from(self), Cow::from(other)))
+    }
+}
+
+impl Ord for BigFloat {
+    fn cmp(self: &BigFloat, other: &BigFloat) -> std::cmp::Ordering {
+        cow_cmp(Cow::from(self), Cow::from(other))
+    }
+}
+
+fn cow_mantissa<'a>(a: Cow<'a>) -> std::borrow::Cow<'a, BigInt> {
+    match a.0 {
+        std::borrow::Cow::Owned(it) =>
+            std::borrow::Cow::Owned(it.mantissa),
+        std::borrow::Cow::Borrowed(it) =>
+            std::borrow::Cow::Borrowed(&it.mantissa),
+    }
+}
+
+fn match_precisions_maybe_swap<'a>(mut a: Cow<'a>, mut b: Cow<'a>) -> (BigInt, std::borrow::Cow<'a, BigInt>, i64, bool) {
+    match_precisions(&mut a, &mut b);
+    if let Cow(std::borrow::Cow::Owned(it)) = a {
+        (it.mantissa, cow_mantissa(b), it.exponent, false)
+    } else if let Cow(std::borrow::Cow::Owned(it)) = b {
+        (it.mantissa, cow_mantissa(a), it.exponent, true)
+    } else {
+        (a.0.mantissa.clone(), cow_mantissa(b), a.0.exponent, false)
+    }
+}
+
+fn cow_add(a: Cow, b: Cow) -> BigFloat {
+    let (mut a, b, exp, _) = match_precisions_maybe_swap(a, b);
+    a += &*b;
+    BigFloat {
+        mantissa: a,
+        exponent: exp,
+    }
+}
+
+fn cow_add_assign(a: &mut BigFloat, mut b: Cow) {
+    match_precisions_mut(a, &mut b);
+    a.mantissa += &b.0.mantissa;
+}
+
+impl<'b> std::ops::AddAssign<&'b BigFloat> for BigFloat {
+    fn add_assign(self: &mut BigFloat, other: &'b BigFloat) {
+        cow_add_assign(self, Cow::from(other));
     }
 }
 
 impl<'a, 'b> std::ops::Add<&'b BigFloat> for &'a BigFloat {
     type Output = BigFloat;
     fn add(self: &'a BigFloat, other: &'b BigFloat) -> BigFloat {
-        let mut copy = self.clone();
-        copy += other;
+        cow_add(Cow::from(self), Cow::from(other))
+    }
+}
 
-        copy
+fn cow_sub(a: Cow, b: Cow) -> BigFloat {
+    let (mut a, b, exp, swapped) = match_precisions_maybe_swap(a, b);
+    a -= &*b;
+    if swapped {
+        a = -a;
+    }
+    BigFloat {
+        mantissa: a,
+        exponent: exp,
+    }
+}
+
+fn cow_sub_assign(a: &mut BigFloat, mut b: Cow) {
+    match_precisions_mut(a, &mut b);
+    a.mantissa -= &b.0.mantissa;
+}
+
+impl<'b> std::ops::SubAssign<&'b BigFloat> for BigFloat {
+    fn sub_assign(self: &mut BigFloat, other: &'b BigFloat) {
+        cow_sub_assign(self, Cow::from(other));
+    }
+}
+
+impl<'a, 'b> std::ops::Sub<&'b BigFloat> for &'a BigFloat {
+    type Output = BigFloat;
+    fn sub(self: &'a BigFloat, other: &'b BigFloat) -> BigFloat {
+        cow_sub(Cow::from(self), Cow::from(other))
     }
 }
 
