@@ -30,22 +30,6 @@ impl BigFloat {
     }
 }
 
-// I hate Rust.
-// I really should just make my own refcounted BigUint type, at this rate.
-struct Cow<'a>(std::borrow::Cow<'a, BigFloat>);
-
-impl<'a> From<BigFloat> for Cow<'a> {
-    fn from(it: BigFloat) -> Self {
-        Cow(std::borrow::Cow::Owned(it))
-    }
-}
-
-impl<'a> From<&'a BigFloat> for Cow<'a> {
-    fn from(it: &'a BigFloat) -> Self {
-        Cow(std::borrow::Cow::Borrowed(it))
-    }
-}
-
 // Based on the code from num_traits.
 fn integer_decode_f64(f: f64) -> (i64, i16) {
     let bits: u64 = f.to_bits();
@@ -118,6 +102,67 @@ impl std::fmt::Display for BigFloat {
     }
 }
 
+// The easiest float operations are of course the multiplicative ones.
+impl<'b> std::ops::MulAssign<&'b BigFloat> for BigFloat {
+    fn mul_assign(self: &mut BigFloat, other: &'b BigFloat) {
+        self.mantissa *= &other.mantissa;
+        self.exponent += other.exponent;
+    }
+}
+
+impl std::ops::Mul<BigFloat> for BigFloat {
+    type Output = BigFloat;
+    fn mul(mut self: BigFloat, other: BigFloat) -> BigFloat {
+        /* Is it possible that we could prefer one or the other? The biggest
+           one in memory, say? */
+        self *= &other;
+        self
+    }
+}
+
+impl<'b> std::ops::Mul<&'b BigFloat> for BigFloat {
+    type Output = BigFloat;
+    fn mul(mut self: BigFloat, other: &'b BigFloat) -> BigFloat {
+        self *= other;
+        self
+    }
+}
+
+impl<'a> std::ops::Mul<BigFloat> for &'a BigFloat {
+    type Output = BigFloat;
+    fn mul(self: &'a BigFloat, mut other: BigFloat) -> BigFloat {
+        other *= self;
+        other
+    }
+}
+
+impl<'a, 'b> std::ops::Mul<&'b BigFloat> for &'a BigFloat {
+    type Output = BigFloat;
+    fn mul(self: &'a BigFloat, other: &'b BigFloat) -> BigFloat {
+        let mut a = self.clone();
+        a *= other;
+        a
+    }
+}
+
+// From here on we need to be able to match precisions (think of this like
+// finding a common denominator) in order to combine pairs of values. For this
+// we utilize clone-on-write pointers, so we can modify one or the other, and
+// then continue down a single code path.
+struct Cow<'a>(std::borrow::Cow<'a, BigFloat>);
+
+impl<'a> From<BigFloat> for Cow<'a> {
+    fn from(it: BigFloat) -> Self {
+        Cow(std::borrow::Cow::Owned(it))
+    }
+}
+
+impl<'a> From<&'a BigFloat> for Cow<'a> {
+    fn from(it: &'a BigFloat) -> Self {
+        Cow(std::borrow::Cow::Borrowed(it))
+    }
+}
+
 fn match_precisions(a: &mut Cow, b: &mut Cow) {
     // The smaller the exponent, the more accuracy we need. Use the smallest
     // exponent.
@@ -177,15 +222,25 @@ fn cow_mantissa<'a>(a: Cow<'a>) -> std::borrow::Cow<'a, BigInt> {
     }
 }
 
+// Take two cows, and extract an owned version of one or the other. This allows
+// us to do things like match_precisions, and then do a destructive but
+// symmetric operation to whichever one we have
+// already modified.
+fn maybe_swap<'a>(a: Cow<'a>, b: Cow<'a>) -> (BigFloat, Cow<'a>, bool) {
+    if let Cow(std::borrow::Cow::Owned(it)) = a {
+        (it, b, false)
+    } else if let Cow(std::borrow::Cow::Owned(it)) = b {
+        (it, a, true)
+    } else {
+        (a.0.into_owned(), b, false)
+    }
+}
+
 fn match_precisions_maybe_swap<'a>(mut a: Cow<'a>, mut b: Cow<'a>) -> (BigInt, std::borrow::Cow<'a, BigInt>, i64, bool) {
     match_precisions(&mut a, &mut b);
-    if let Cow(std::borrow::Cow::Owned(it)) = a {
-        (it.mantissa, cow_mantissa(b), it.exponent, false)
-    } else if let Cow(std::borrow::Cow::Owned(it)) = b {
-        (it.mantissa, cow_mantissa(a), it.exponent, true)
-    } else {
-        (a.0.mantissa.clone(), cow_mantissa(b), a.0.exponent, false)
-    }
+    let (a, b, swapped) = maybe_swap(a, b);
+
+    (a.mantissa, cow_mantissa(b), a.exponent, swapped)
 }
 
 fn cow_add(a: Cow, b: Cow) -> BigFloat {
@@ -232,16 +287,16 @@ fn cow_sub_assign(a: &mut BigFloat, mut b: Cow) {
     a.mantissa -= &b.0.mantissa;
 }
 
-impl<'b> std::ops::SubAssign<&'b BigFloat> for BigFloat {
-    fn sub_assign(self: &mut BigFloat, other: &'b BigFloat) {
-        cow_sub_assign(self, Cow::from(other));
-    }
-}
-
 impl<'a, 'b> std::ops::Sub<&'b BigFloat> for &'a BigFloat {
     type Output = BigFloat;
     fn sub(self: &'a BigFloat, other: &'b BigFloat) -> BigFloat {
         cow_sub(Cow::from(self), Cow::from(other))
+    }
+}
+
+impl<'b> std::ops::SubAssign<&'b BigFloat> for BigFloat {
+    fn sub_assign(self: &mut BigFloat, other: &'b BigFloat) {
+        cow_sub_assign(self, Cow::from(other));
     }
 }
 
