@@ -1,3 +1,5 @@
+*.rdbg
+
 test
 *.ppm
 *.png
@@ -5,7 +7,6 @@ test
 *.obj
 *.ilk
 *.pdb
-*.rdbg
 
 
 # Added by cargo

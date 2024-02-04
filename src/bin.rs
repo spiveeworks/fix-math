@@ -1,3 +1,3 @@
 fn main() {
-    fix_lab::test();
+    fixlab::test();
 }

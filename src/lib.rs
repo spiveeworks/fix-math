@@ -1,5 +1,8 @@
+pub mod big_float;
+
 pub fn test() {
-    println!("Test");
+    let x = big_float::BigFloat::from(-10.57);
+    println!("{}", x);
 }
 
 #[test]
