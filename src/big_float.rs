@@ -81,7 +81,6 @@ impl std::fmt::Display for BigFloat {
 
             // First display the whole part and a period.
             write!(f, "{}", &mantissa >> -self.exponent)?;
-            write!(f, ".")?;
 
             // Now the fractional part.
             let unit = num_bigint::BigUint::one() << -self.exponent;
@@ -89,6 +88,9 @@ impl std::fmt::Display for BigFloat {
             remainder %= &unit;
             // Stop printing once the next three digits would all be zero.
             let cutoff = &unit >> 10;
+            if &remainder > &cutoff {
+                write!(f, ".")?;
+            }
             while &remainder > &cutoff {
                 // Calculate one digit and print it.
                 remainder *= 10 as u8;
@@ -142,6 +144,23 @@ impl<'a, 'b> std::ops::Mul<&'b BigFloat> for &'a BigFloat {
         let mut a = self.clone();
         a *= other;
         a
+    }
+}
+
+impl<'b> std::ops::DivAssign<&'b BigFloat> for BigFloat {
+    fn div_assign(self: &mut BigFloat, other: &'b BigFloat) {
+        self.mantissa /= &other.mantissa;
+        self.exponent -= other.exponent;
+    }
+}
+
+impl std::ops::Neg for BigFloat {
+    type Output = BigFloat;
+    fn neg(self: BigFloat) -> BigFloat {
+        BigFloat {
+            mantissa: -self.mantissa,
+            exponent: self.exponent,
+        }
     }
 }
 
@@ -263,6 +282,12 @@ impl<'b> std::ops::AddAssign<&'b BigFloat> for BigFloat {
     }
 }
 
+impl std::ops::AddAssign<BigFloat> for BigFloat {
+    fn add_assign(self: &mut BigFloat, other: BigFloat) {
+        cow_add_assign(self, Cow::from(other));
+    }
+}
+
 impl<'a, 'b> std::ops::Add<&'b BigFloat> for &'a BigFloat {
     type Output = BigFloat;
     fn add(self: &'a BigFloat, other: &'b BigFloat) -> BigFloat {
@@ -287,16 +312,22 @@ fn cow_sub_assign(a: &mut BigFloat, mut b: Cow) {
     a.mantissa -= &b.0.mantissa;
 }
 
+impl<'b> std::ops::SubAssign<&'b BigFloat> for BigFloat {
+    fn sub_assign(self: &mut BigFloat, other: &'b BigFloat) {
+        cow_sub_assign(self, Cow::from(other));
+    }
+}
+
+impl std::ops::SubAssign<BigFloat> for BigFloat {
+    fn sub_assign(self: &mut BigFloat, other: BigFloat) {
+        cow_sub_assign(self, Cow::from(other));
+    }
+}
+
 impl<'a, 'b> std::ops::Sub<&'b BigFloat> for &'a BigFloat {
     type Output = BigFloat;
     fn sub(self: &'a BigFloat, other: &'b BigFloat) -> BigFloat {
         cow_sub(Cow::from(self), Cow::from(other))
-    }
-}
-
-impl<'b> std::ops::SubAssign<&'b BigFloat> for BigFloat {
-    fn sub_assign(self: &mut BigFloat, other: &'b BigFloat) {
-        cow_sub_assign(self, Cow::from(other));
     }
 }
 
