@@ -331,6 +331,27 @@ impl<'a, 'b> std::ops::Sub<&'b BigFloat> for &'a BigFloat {
     }
 }
 
+impl<'b> std::ops::Sub<&'b BigFloat> for BigFloat {
+    type Output = BigFloat;
+    fn sub(self: BigFloat, other: &'b BigFloat) -> BigFloat {
+        cow_sub(Cow::from(self), Cow::from(other))
+    }
+}
+
+impl<'a> std::ops::Sub<BigFloat> for &'a BigFloat {
+    type Output = BigFloat;
+    fn sub(self: &'a BigFloat, other: BigFloat) -> BigFloat {
+        cow_sub(Cow::from(self), Cow::from(other))
+    }
+}
+
+impl std::ops::Sub for BigFloat {
+    type Output = BigFloat;
+    fn sub(self: BigFloat, other: BigFloat) -> BigFloat {
+        cow_sub(Cow::from(self), Cow::from(other))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

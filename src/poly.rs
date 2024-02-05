@@ -51,7 +51,7 @@ pub fn eval(p: &Polynomial, x: &BigFloat) -> BigFloat {
     y
 }
 
-fn mul_add(out: &mut Polynomial, a: &Polynomial, b: &Polynomial) {
+pub fn mul_add(out: &mut Polynomial, a: &Polynomial, b: &Polynomial) {
     for i in 0..a.coefficients.len() {
         for j in 0..b.coefficients.len() {
             let mut prod = &a.coefficients[i] * &b.coefficients[j];
@@ -67,7 +67,7 @@ fn mul_add(out: &mut Polynomial, a: &Polynomial, b: &Polynomial) {
     }
 }
 
-fn mul_add_constant(out: &mut Polynomial, a: &Polynomial, b: &BigFloat) {
+pub fn mul_add_constant(out: &mut Polynomial, a: &Polynomial, b: &BigFloat) {
     for i in 0..a.coefficients.len() {
         let mut prod = &a.coefficients[i] * b;
         prod.adjust_exponent(out.target_exponent);
@@ -99,7 +99,7 @@ impl<'a, 'b> std::ops::Mul<&'b Polynomial> for &'a Polynomial {
     }
 }
 
-pub fn interpolate(points: &Vec<(BigFloat, BigFloat)>, target_exponent: i64) -> Polynomial {
+pub fn interpolate(points: &[(BigFloat, BigFloat)], target_exponent: i64) -> Polynomial {
     let one = BigFloat{
         mantissa: BigInt::from(1),
         exponent: 0,
@@ -148,7 +148,7 @@ pub fn interpolate(points: &Vec<(BigFloat, BigFloat)>, target_exponent: i64) -> 
         };
         zeroed = &zeroed * &binomial;
 
-        println!("Interpolated ({}, {}), polynomial = {}, zeroed = {}", x, y, out, zeroed);
+        // println!("Interpolated ({}, {}), polynomial = {}, zeroed = {}", x, y, out, zeroed);
     }
 
     out
@@ -187,12 +187,12 @@ mod test {
         };
 
         // Evaluate the polynomial at a few points, to use as sample points.
-        let f = |i| {
+        let mut points = Vec::with_capacity(expected.coefficients.len());
+        for i in 0..expected.coefficients.len() {
             let x = BigFloat::from(i as f64);
             let y = eval(&expected, &x);
-            (x, y)
+            points.push((x, y));
         };
-        let points = (0..expected.coefficients.len()).map(f).collect();
 
         // Try to recover the polynomial from its sample points.
         let actual = interpolate(&points, expected.target_exponent);
