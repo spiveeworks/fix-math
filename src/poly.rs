@@ -1,7 +1,7 @@
 use num_bigint::BigInt;
 use super::big_float::BigFloat;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Polynomial {
     pub coefficients: Vec<BigFloat>,
     pub target_exponent: i64,
@@ -49,6 +49,21 @@ pub fn eval(p: &Polynomial, x: &BigFloat) -> BigFloat {
         y.adjust_exponent(p.target_exponent);
     }
     y
+}
+
+pub fn differentiate(p: &Polynomial) -> Polynomial {
+    let mut result = Polynomial {
+        coefficients: Vec::with_capacity(p.coefficients.len() - 1),
+        target_exponent: p.target_exponent,
+    };
+
+    for i in 1..p.coefficients.len() {
+        let mut c = p.coefficients[i].clone();
+        c.mantissa *= i;
+        result.coefficients.push(c);
+    }
+
+    result
 }
 
 pub fn mul_add(out: &mut Polynomial, a: &Polynomial, b: &Polynomial) {
