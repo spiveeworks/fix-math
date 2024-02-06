@@ -47,12 +47,24 @@ pub fn reciprocol(y: &BigFloat) -> BigFloat {
     val
 }
 
-pub fn half_invsqrt(y: &BigFloat) -> BigFloat {
-    let sqrt = square_root(y);
-    let mut invsqrt = reciprocol(&sqrt);
-    invsqrt.exponent -= 1;
+pub fn invsqrt(y: &BigFloat) -> BigFloat {
+    reciprocol(&square_root(y))
+}
 
+// Usable as the derivative of sqrt
+pub fn half_invsqrt(y: &BigFloat) -> BigFloat {
+    let mut invsqrt = invsqrt(y);
+    invsqrt.exponent -= 1;
     invsqrt
+}
+
+// usable as the derivative of invsqrt
+pub fn neg_half_invsqrt_cubed(y: &BigFloat) -> BigFloat {
+    let invsqrt = invsqrt(y);
+    let mut cubed = &invsqrt * &invsqrt * &invsqrt;
+
+    cubed.exponent -= 1;
+    -cubed
 }
 
 #[cfg(test)]
