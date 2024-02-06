@@ -16,4 +16,15 @@ fn main() {
     ).unwrap();
 
     println!("Final polynomial: {}, error: {}", p, err);
+
+    println!("");
+    println!("Testing float printing.");
+    let depth = 100;
+    for i in 0..depth {
+        let x = BigFloat {
+            mantissa: num_bigint::BigInt::from(1 as u8),
+            exponent: -i,
+        };
+        println!("2^{}: {}", -i, x);
+    }
 }

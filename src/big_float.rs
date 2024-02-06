@@ -77,6 +77,7 @@ impl std::fmt::Display for BigFloat {
             write!(f, "{}", mantissa << self.exponent)?;
         } else {
             // I hate this library.
+            use num_traits::Zero;
             use num_traits::One;
 
             // First display the whole part and a period.
@@ -86,15 +87,21 @@ impl std::fmt::Display for BigFloat {
             let unit = num_bigint::BigUint::one() << -self.exponent;
             let mut remainder = self.mantissa.abs().to_biguint().unwrap();
             remainder %= &unit;
-            // Stop printing once the next three digits would all be zero.
-            let cutoff = &unit >> 20;
-            if &remainder > &cutoff {
-                write!(f, ".")?;
-            }
-            while &remainder > &cutoff {
+            let digits = std::cmp::max(4, (-self.exponent) * 3 / 10 + 1);
+            // let mut cutoff = num_bigint::BigUint::from(0 as u8);
+            let mut drawn_separator = false;
+            for _ in 0..digits {
+                if remainder.is_zero() {
+                    break;
+                }
                 // Calculate one digit and print it.
                 remainder *= 10 as u8;
+                // cutoff *= 10 as u8;
                 let digit = &remainder >> -self.exponent;
+                if !drawn_separator {
+                    write!(f, ".")?;
+                    drawn_separator = true;
+                }
                 write!(f, "{}", digit)?;
 
                 remainder %= &unit;
