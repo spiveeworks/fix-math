@@ -9,7 +9,6 @@ fn main() {
     let xr = BigFloat::from(2.0).with_exponent(precision);
     let (p, err) = remez(
         reference::square_root,
-        reference::half_invsqrt,
         &xl, &xr,
         6,
         precision,
@@ -22,7 +21,6 @@ fn main() {
     let xr = BigFloat::from(2.0).with_exponent(precision);
     let (p, err) = remez(
         reference::invsqrt,
-        reference::neg_half_invsqrt_cubed,
         &xl, &xr,
         6,
         precision,

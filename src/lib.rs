@@ -7,17 +7,15 @@ pub mod reference;
 use big_float::BigFloat;
 use poly::Polynomial;
 
-pub fn remez<F1, F2>(
-    f: F1,
-    derivative: F2,
+pub fn remez<F>(
+    f: F,
     xl: &BigFloat,
     xr: &BigFloat,
     order: usize,
     target_exponent: i64,
     iterations: u32
 ) -> Result<(Polynomial, BigFloat), bisect::BisectionError>
-    where F1: Fn(&BigFloat) -> BigFloat,
-          F2: Fn(&BigFloat) -> BigFloat
+    where F: Fn(&BigFloat) -> BigFloat
 {
     let mut sample_at = Vec::with_capacity(order + 2);
     {
@@ -63,10 +61,8 @@ pub fn remez<F1, F2>(
         polynomial = remez_interpolation(&points, target_exponent);
         println!("Polynomial: {}", polynomial);
 
-        // Sample the derivative of the error function, to find its extrema.
-        let polynomial_slope = poly::differentiate(&polynomial);
+        // Sample the error function, to find its extrema.
         // let err_fun = |x| poly::eval(&polynomial, x) - f(x);
-        // let err_slope = |x| poly::eval(&polynomial_slope, x) - derivative(x);
 
         let mut extrema = Vec::with_capacity(order + 2);
         // Already declared outside of this loop.
@@ -83,33 +79,15 @@ pub fn remez<F1, F2>(
             best_error = error;
         }
 
-        let mut x = points[0].0.clone();
-        let mut xnext = points[1].0.clone();
         for i in 0..order {
-            let xprev = x;
-            x = xnext;
-            xnext = points[i + 2].0.clone();
+            let (new_x, mut error) = bisect::bisect_turning_point(
+                |x| poly::eval(&polynomial, x) - f(x),
+                points[i].0.clone(),
+                points[i + 1].0.clone(),
+                points[i + 2].0.clone(),
+            )?;
 
-            let mut bisect_l;
-            if i == 0 {
-                bisect_l = xprev;
-            } else {
-                bisect_l = &xprev + &x;
-                bisect_l.exponent -= 1;
-            }
-            let mut bisect_r;
-            if i == order - 1 {
-                bisect_r = xnext.clone();
-            } else {
-                bisect_r = &x + &xnext;
-                bisect_r.exponent -= 1;
-            }
-            let new_x = bisect::bisect(
-                |x| poly::eval(&polynomial_slope, x) - derivative(x),
-                bisect_l, bisect_r, &zero)?;
-
-            // Check the error values at this extremum.
-            let mut error = poly::eval(&polynomial, &new_x) - f(&new_x);
+            // Check the error value at this extremum.
             error.mantissa = error.mantissa.abs();
             if &error > &worst_error {
                 worst_error = error.clone();
@@ -260,13 +238,11 @@ mod tests {
             ],
             target_exponent: -32,
         };
-        let derivative_coeffs = poly::differentiate(&cubic);
         let xl = BigFloat::from(0.25);
         let xr = BigFloat::from(1.5);
         let iterations = 3;
         let (p, err) = remez(
             |x| poly::eval(&cubic, x),
-            |x| poly::eval(&derivative_coeffs, x),
             &xl, &xr,
             cubic.coefficients.len() - 2, // give us one term fewer than what we are putting in
             cubic.target_exponent, // keep the same output precision
