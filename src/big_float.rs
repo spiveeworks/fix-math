@@ -87,7 +87,7 @@ impl std::fmt::Display for BigFloat {
             let mut remainder = self.mantissa.abs().to_biguint().unwrap();
             remainder %= &unit;
             // Stop printing once the next three digits would all be zero.
-            let cutoff = &unit >> 10;
+            let cutoff = &unit >> 20;
             if &remainder > &cutoff {
                 write!(f, ".")?;
             }

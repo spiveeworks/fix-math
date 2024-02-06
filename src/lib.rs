@@ -1,6 +1,9 @@
 pub mod big_float;
 pub mod poly;
 
+pub mod bisect;
+pub mod reference;
+
 use big_float::BigFloat;
 use poly::Polynomial;
 
@@ -12,7 +15,7 @@ pub fn remez<F1, F2>(
     order: usize,
     target_exponent: i64,
     iterations: u32
-) -> Result<(Polynomial, BigFloat), BisectionError>
+) -> Result<(Polynomial, BigFloat), bisect::BisectionError>
     where F1: Fn(&BigFloat) -> BigFloat,
           F2: Fn(&BigFloat) -> BigFloat
 {
@@ -58,6 +61,7 @@ pub fn remez<F1, F2>(
 
         // Calculate a polynomial with errors that alternate at these points
         polynomial = remez_interpolation(&points, target_exponent);
+        println!("Polynomial: {}", polynomial);
 
         // Sample the derivative of the error function, to find its extrema.
         let polynomial_slope = poly::differentiate(&polynomial);
@@ -86,13 +90,23 @@ pub fn remez<F1, F2>(
             x = xnext;
             xnext = points[i + 2].0.clone();
 
-            let mut bisec_l = &xprev + &x;
-            bisec_l.exponent -= 1;
-            let mut bisect_r = &x + &xnext;
-            bisect_r.exponent -= 1;
-            let new_x = bisect(
+            let mut bisect_l;
+            if i == 0 {
+                bisect_l = xprev;
+            } else {
+                bisect_l = &xprev + &x;
+                bisect_l.exponent -= 1;
+            }
+            let mut bisect_r;
+            if i == order - 1 {
+                bisect_r = xnext.clone();
+            } else {
+                bisect_r = &x + &xnext;
+                bisect_r.exponent -= 1;
+            }
+            let new_x = bisect::bisect(
                 |x| poly::eval(&polynomial_slope, x) - derivative(x),
-                bisec_l, bisect_r, &zero)?;
+                bisect_l, bisect_r, &zero)?;
 
             // Check the error values at this extremum.
             let mut error = poly::eval(&polynomial, &new_x) - f(&new_x);
@@ -185,98 +199,10 @@ fn remez_interpolation(points: &[(BigFloat, BigFloat)], target_exponent: i64) ->
     result
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BisectionError {
-    EndpointsEqual,
-    EndpointsSameSide(std::cmp::Ordering),
-}
-
-pub fn bisect<F>(f: F, mut xl: BigFloat, mut xr: BigFloat, y: &BigFloat)
-    -> Result<BigFloat, BisectionError>
-        where F: Fn(&BigFloat) -> BigFloat
-{
-    use std::cmp::Ordering;
-
-    let xorder = Ord::cmp(&xl, &xr);
-    if xorder == Ordering::Greater {
-        std::mem::swap(&mut xl, &mut xr);
-    }
-
-    let yl = f(&xl);
-    let lorder = Ord::cmp(&yl, y);
-    if lorder == Ordering::Equal {
-        return Ok(xl);
-    }
-
-    let y2 = f(&xr);
-    let rorder = Ord::cmp(&y2, y);
-    if rorder == Ordering::Equal {
-        return Ok(xr);
-    }
-
-    if xorder == Ordering::Equal {
-        return Err(BisectionError::EndpointsEqual);
-    }
-
-    if lorder == rorder {
-        return Err(BisectionError::EndpointsSameSide(lorder));
-    }
-
-    loop {
-        let mut xm = &xl + &xr;
-        xm.mantissa >>= 1;
-        if &xm == &xl || &xm == &xr {
-            return Ok(xl);
-        }
-
-        let ym = f(&xm);
-        let morder = Ord::cmp(&ym, y);
-        if morder == Ordering::Equal {
-            return Ok(xm);
-        }
-
-        // Replace one of the endpoints and continue.
-        if morder == lorder {
-            xl = xm;
-        } else {
-            xr = xm;
-        }
-    }
-}
-
-pub fn test() {
-    let x = big_float::BigFloat::from(-10.57);
-    println!("{}", x);
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn square(x: &BigFloat) -> BigFloat {
-        let xx = BigFloat {
-            mantissa: &x.mantissa * &x.mantissa,
-            exponent: 2 * x.exponent,
-        };
-        return xx.with_exponent(x.exponent);
-    }
-
-    #[test]
-    fn test_bisect() {
-        let y = BigFloat::from(2.0);
-
-        let xl = BigFloat::from(1.0).with_exponent(-256);
-        let xr = BigFloat::from(2.0).with_exponent(-256);
-        let sqrt_y = bisect(square, xl, xr, &y).unwrap();
-        println!("The square root of {} was calculated to be {}", y, sqrt_y);
-
-        use num_traits::Signed;
-        let err = &y - &square(&sqrt_y);
-        assert!(
-            err.mantissa.abs() < num_bigint::BigInt::from(4),
-            "Error was too high: {}",
-            err
-        );
-    }
 
     #[test]
     fn test_remez_interpolation() {
