@@ -3,8 +3,9 @@ use fixlab::remez;
 use fixlab::reference;
 
 fn main() {
-    /*
     let precision = -32;
+
+    /*
     let xl = BigFloat::from(0.5).with_exponent(precision);
     let xr = BigFloat::from(2.0).with_exponent(precision);
     let (p, err) = remez(
@@ -16,11 +17,22 @@ fn main() {
     ).unwrap();
     */
 
-    let precision = -32;
+    /*
     let xl = BigFloat::from(0.5).with_exponent(precision);
     let xr = BigFloat::from(2.0).with_exponent(precision);
     let (p, err) = remez(
         reference::invsqrt,
+        &xl, &xr,
+        6,
+        precision,
+        5
+    ).unwrap();
+    */
+
+    let xl = BigFloat::from(1.0).with_exponent(precision);
+    let xr = BigFloat::from(2.0).with_exponent(precision);
+    let (p, err) = remez(
+        reference::log2,
         &xl, &xr,
         6,
         precision,
