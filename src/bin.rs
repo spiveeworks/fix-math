@@ -40,4 +40,16 @@ fn main() {
     ).unwrap();
 
     println!("Final polynomial: {}, error: {}", p, err);
+
+    let val = BigFloat::from(12.1234).with_exponent(-256);
+    let iter = fixlab::number::SimplifiedFractionIter::from_float(val);
+    for val in iter {
+        let mut as_float = BigFloat {
+            mantissa: val.numer().clone(),
+            exponent: 0,
+        };
+        as_float.adjust_exponent(-64);
+        as_float.mantissa /= val.denom();
+        println!("{} = {}", val, as_float);
+    }
 }
