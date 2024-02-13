@@ -2,6 +2,7 @@ pub mod big_float;
 pub mod poly;
 
 pub mod number;
+pub mod decimal;
 
 pub mod bisect;
 pub mod reference;
