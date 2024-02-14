@@ -29,7 +29,7 @@ impl std::fmt::Display for Decimal {
 }
 
 impl Decimal {
-    pub fn calculate(x: &BigRational) -> Self {
+    pub fn calculate(x: &BigRational, max_digits: usize) -> Self {
         use num_traits::Signed;
         use num_traits::Zero;
         use num_integer::Integer;
@@ -46,7 +46,7 @@ impl Decimal {
         let mut offsets = HashMap::new();
 
         let mut digits = String::new();
-        while !n.is_zero() && !offsets.contains_key(&n) {
+        while !n.is_zero() && !offsets.contains_key(&n) && digits.len() < max_digits {
             // Store the offset that n was encountered at, but only after
             // calculating the next digit, since storing it will consume the
             // value.
@@ -68,13 +68,21 @@ impl Decimal {
                 nonrecurring: digits,
                 recurring: String::new(),
             }
-        } else {
+        } else if offsets.contains_key(&n) {
             let (nrec, rec) = digits.split_at(offsets[&n]);
             Decimal {
                 is_negative,
                 wholepart,
                 nonrecurring: String::from(nrec),
                 recurring: String::from(rec),
+            }
+        } else {
+            digits.push_str("...");
+            Decimal {
+                is_negative,
+                wholepart,
+                nonrecurring: digits,
+                recurring: String::new(),
             }
         }
     }
@@ -116,7 +124,7 @@ mod tests {
     fn test_calculate() {
         let calc_decimal = |n, d| {
             let r = BigRational::new(BigInt::from(n), BigInt::from(d));
-            Decimal::calculate(&r)
+            Decimal::calculate(&r, 100)
         };
         assert_eq!(format!("{}", calc_decimal(1, 3)), "0.{3}");
         assert_eq!(format!("{}", calc_decimal(-1, 3)), "-0.{3}");
