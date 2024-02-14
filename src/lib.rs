@@ -1,7 +1,7 @@
 pub mod big_float;
 pub mod poly;
 
-pub mod number;
+pub mod euclids_alg;
 pub mod decimal;
 
 pub mod bisect;

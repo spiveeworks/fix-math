@@ -1,6 +1,7 @@
 use fixlab::big_float::BigFloat;
 use fixlab::remez;
 use fixlab::reference;
+use fixlab::euclids_alg;
 
 fn main() {
     let precision = -32;
@@ -42,7 +43,7 @@ fn main() {
     println!("Final polynomial: {}, error: {}", p, err);
 
     let val = BigFloat::from(12.1234).with_exponent(-256);
-    let iter = fixlab::number::SimplifiedFractionIter::from_float(val);
+    let iter = euclids_alg::SimplifiedFractionIter::from_float(val);
     for val in iter {
         println!("{} = {}", val, fixlab::decimal::Decimal::calculate(&val, 160));
     }
