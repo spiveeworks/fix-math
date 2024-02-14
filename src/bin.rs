@@ -43,7 +43,7 @@ fn main() {
     println!("Final polynomial: {}, error: {}", p, err);
 
     let val = BigFloat::from(12.1234).with_exponent(-256);
-    let iter = euclids_alg::SimplifiedFractionIter::from_float(val);
+    let iter = euclids_alg::RatApproxIter::from_float(val);
     for val in iter {
         println!("{} = {}", val, fixlab::decimal::Decimal::calculate(&val, 160));
     }
