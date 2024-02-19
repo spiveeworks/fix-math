@@ -3,6 +3,9 @@
 
 use std::ops::{Add, Mul};
 
+use crate::big_float::BigFloat;
+use crate::bisect;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Range<T> {
     pub l: T,
@@ -188,6 +191,63 @@ impl<'a, 'b, T> Mul<&'b Range<T>> for &'a Range<T>
     }
 }
 
+// Consider if x: [-1, 10], and y: [-1, 10], where x and y may be distinct.
+// x * y will be in [-10, 100], because one could be negative while the other
+// is a large positive... Meanwhile x^2 can only be in [0, 100], because any
+// negative x will still square to a positive. In this way multiplying two
+// equal ranges is NOT the same as squaring one of them.
+//
+// In order to evaluate functions like this, we want to apply the function to
+// each endpoint, and to any turning points in between those endpoints, and
+// take the extremes of this set to be the endpoints of the range. So in the
+// case of [-1, 10] squared, {-1, 0, 10} square to {1, 0, 100} respectively,
+// giving [0, 100] as the range.
+pub fn eval_monotonic<T, F>(f: F, x: &Range<T>, turning_points: &[T])
+    -> Range<T>
+        where F: Fn(&T) -> T,
+              T: Ord,
+{
+    let mut min = f(&x.l);
+    let mut max = f(&x.r);
+    if min > max {
+        std::mem::swap(&mut min, &mut max);
+    }
+
+    let mut i = 0;
+    while i < turning_points.len() && turning_points[i] <= x.l {
+        i += 1;
+    }
+    while i < turning_points.len() && turning_points[i] < x.r {
+        let y = f(&turning_points[i]);
+        if y < min {
+            min = y;
+        } else if y > max {
+            max = y;
+        }
+
+        i += 1;
+    }
+
+    Range { l: min, r: max }
+}
+
+pub fn bisect_range<F>(f: F, xl: BigFloat, xr: BigFloat, y: &Range<BigFloat>)
+    -> Result<Range<BigFloat>, bisect::BisectionError>
+        where F: Fn(&BigFloat) -> BigFloat
+{
+    let soln_l;
+    let mut soln_r;
+    if y.l == y.r {
+        soln_l = bisect::bisect(&f, xl, xr, &y.l)?;
+        soln_r = soln_l.clone();
+    } else {
+        soln_l = bisect::bisect(&f, xl.clone(), xr.clone(), &y.l)?;
+        soln_r = bisect::bisect(&f, xl, xr, &y.r)?;
+    }
+    soln_r.mantissa += 1;
+    Ok(Range::new(soln_l, soln_r))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,6 +336,27 @@ mod tests {
                 true
             ).unwrap();
         }
+    }
+
+    #[test]
+    fn test_monotonic() {
+        let xr = Range::new(-1, 10);
+        assert_eq!(&xr * &xr, Range::new(-10, 100));
+        let x_squared = eval_monotonic(|x| x * x, &xr, &[0]);
+        assert_eq!(x_squared, Range::new(0, 100));
+
+        assert_eq!(&(&xr * &xr) * &xr, Range::new(-100, 1000));
+        let x_cubed = eval_monotonic(|x| x * x * x, &xr, &[]);
+        assert_eq!(x_cubed, Range::new(-1, 1000));
+    }
+
+    #[test]
+    fn test_bisect() {
+        let yr = Range::new(BigFloat::from(2.0), BigFloat::from(2.25));
+        let xr = bisect_range(|x| x * x, BigFloat::from(1.0), BigFloat::from(2.0), &yr).unwrap();
+        let xr_squared = eval_monotonic(|x| x * x, &xr, &[BigFloat::from(0.0)]);
+        assert!(xr_squared.l <= yr.l);
+        assert!(xr_squared.r >= yr.r);
     }
 }
 
