@@ -4,6 +4,8 @@ pub mod poly;
 pub mod euclids_alg;
 pub mod decimal;
 
+pub mod range;
+
 pub mod bisect;
 pub mod reference;
 
